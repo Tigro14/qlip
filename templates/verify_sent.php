@@ -10,7 +10,7 @@
     <?php if (!$ok): ?>
         <p class="flash flash-err">
             L'envoi a echoue : <?= e($error) ?>. Le compte n'est pas active ;
-            recomence l'inscription ou verifie la configuration SMTP.
+            recomence l'inscription ou verifie la configuration du transport email.
         </p>
     <?php endif; ?>
 
@@ -20,13 +20,13 @@
         </p>
     <?php endif; ?>
 
-    <?php if ($transport !== 'smtp'): ?>
+    <?php if ($transport === 'outbox' || $transport === 'log' || $transport === 'null'): ?>
         <p>
             <a class="button" href="<?= e($link) ?>">Ouvrir le lien de verification</a>
         </p>
     <?php else: ?>
         <p class="note">
-            Le lien n'est pas affiche ici : il est seulement dans le message envoye.
+            Le lien n est pas affiche ici : il est seulement dans le message envoye.
             Sans lui, n'importe qui pourrait activer le compte qu'il vient de creer.
         </p>
     <?php endif; ?>

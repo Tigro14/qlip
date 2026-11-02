@@ -66,6 +66,10 @@ fi
     [ $(( php_status + mock_status )) -eq 0 ]
 
     echo
+    echo "== Transport local (remise au MTA, verifiee contre un faux sendmail) =="
+    php tests/sendmail_test.php
+
+    echo
     echo "== Application (routes, quotas, exports) =="
     QLIP_WEBAUTHN_JSON="$QLIP_OUT/webauthn.json" php tests/app_test.php
 

@@ -23,6 +23,9 @@ final class Config
     /** @var array<string, mixed> */
     public array $smtp;
 
+    /** @var array<string, mixed> */
+    public array $sendmail;
+
     public function __construct(array $values = [])
     {
         $root = \env('QLIP_ROOT') ?: dirname(__DIR__, 2);
@@ -57,6 +60,15 @@ final class Config
             'cafile' => $values['smtp_cafile'] ?? \env('QLIP_SMTP_CAFILE'),
             'hello' => $values['smtp_hello'] ?? (\env('QLIP_SMTP_HELLO') ?: 'localhost'),
             'timeout' => (int) ($values['smtp_timeout'] ?? 15),
+        ];
+
+        // Transport local : remise au MTA de la machine. Pas d identifiant, donc rien a lire
+        // dans l environnement qui puisse fuiter. L adresse d envoi doit etre une adresse
+        // simple : le MTA la recoit comme argument (-f), pas comme nom d affichage.
+        $this->sendmail = [
+            'path' => $values['sendmail_path'] ?? (\env('QLIP_SENDMAIL') ?: '/usr/sbin/sendmail'),
+            'from' => $values['sendmail_from'] ?? (\env('QLIP_SENDMAIL_FROM') ?: $this->smtp['from']),
+            'timeout' => (int) ($values['sendmail_timeout'] ?? 15),
         ];
     }
 

@@ -40,7 +40,7 @@ Configuration par variables d'environnement :
 | `QLIP_ORIGINS` | `QLIP_BASE_URL` | origines acceptees (liste separee par des virgules) |
 | `QLIP_ADMIN_EMAILS` | vide | comptes administrateurs (liste separee par des virgules) |
 | `QLIP_DAILY_LIMIT` | `10` | creations de badge par jour et par compte |
-| `QLIP_MAIL_TRANSPORT` | `outbox` | `outbox`, `log`, `null` ou `smtp` |
+| `QLIP_MAIL_TRANSPORT` | `outbox` | `outbox`, `log`, `null`, `smtp` ou `local` |
 | `QLIP_SMTP_HOST` | vide | serveur SMTP, en TLS implicite |
 | `QLIP_SMTP_PORT` | `465` | port SMTP (465 = TLS implicite) |
 | `QLIP_SMTP_USER` | vide | identifiant (la boite MAIL, chez la plupart des hebergeurs) |
@@ -48,6 +48,8 @@ Configuration par variables d'environnement :
 | `QLIP_SMTP_FROM` | `QLIP_SMTP_USER` | adresse d'envoi, aussi utilisee dans l'enveloppe |
 | `QLIP_SMTP_CAFILE` | vide | liste de racines, sinon celle du systeme |
 | `QLIP_SMTP_HELLO` | `localhost` | nom donne a `EHLO` |
+| `QLIP_SENDMAIL` | `/usr/sbin/sendmail` | chemin du MTA local (transport `local`) |
+| `QLIP_SENDMAIL_FROM` | `QLIP_SMTP_FROM` | adresse d'enveloppe du MTA local |
 | `QLIP_SECURE_COOKIES` | `0` | cookie `Secure` (mettre a 1 derriere HTTPS) |
 | `QLIP_ATTESTATION_ROOTS` | vide | PEM de racines pour verifier une attestation `packed` |
 
@@ -80,7 +82,7 @@ contexte sur : HTTPS, ou `localhost`.
 
 ## Emails
 
-Quatre transports, choisis par `QLIP_MAIL_TRANSPORT` :
+Cinq transports, choisis par `QLIP_MAIL_TRANSPORT` :
 
 - `outbox` (defaut) : le message est ecrit en `.eml` dans `var/outbox`. C'est le seul qui
   permet de lire le lien sans serveur mail, donc le seul utilise par les tests ;
@@ -90,12 +92,21 @@ Quatre transports, choisis par `QLIP_MAIL_TRANSPORT` :
   dependance, donc pas de PHPMailer : `EHLO`, `AUTH LOGIN`, `MAIL FROM`, `RCPT TO`, `DATA`,
   `QUIT`, ecrits en CRLF, avec le point de debut de ligne double (sinon le serveur croirait
   que le corps est termine).
+- `local` : remise au MTA de la machine, par `src/Support/Sendmail.php` (`/usr/sbin/sendmail
+  -t -i -f <adresse>`). Sans dependance, sans authentification et sans TLS : la confiance
+  vient de la machine elle-meme. Les arguments sont donnes en liste, jamais dans une chaine
+  de commande, et le message est ecrit sur stdin.
 
 En SMTP, la connexion est en TLS implicite (port 465) et la verification du certificat est
 toujours active : sans elle, le mot de passe partirait vers un serveur non identifie. Le mot
 de passe n'est jamais ecrit dans le journal, et la page d'inscription ne montre plus le lien
-de verification quand le transport est `smtp` : il est seulement dans le message envoye.
-Aucune copie `.eml` n'est ecrite pour ce transport, le journal (`var/log/mail.log`) suffit.
+de verification pour les transports reels (`smtp` et `local`) : il est seulement dans le
+message envoye. Aucune copie `.eml` n'est ecrite pour ces transports, le journal
+(`var/log/mail.log`) suffit.
+
+Le transport `local` ne corrige pas la deliverability : si la machine n'est pas le MX du
+domaine, le SPF du domaine ne valide pas son IP, et le message peut etre refuse ou finir en
+spam. Le check ne verifie que la remise au MTA, pas la reception.
 
 L'inscription exige un email verifie : sans verification, le tableau de bord et la
 creation de badge renvoient 403. Les tentatives de connexion sont limitees a 8 par
@@ -205,13 +216,18 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    pages, quotas par compte, exports etancheite, CSRF, ceremony WebAuthn par la route,
-   transport smtp : lien masque et echec d envoi signale) ;
+   transports smtp et local : lien masque et echec d envoi signale) ;
 7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
    serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
    `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
    le client reagite : certificat refuse sans liste de confiance, arret apres un 535, refus
    quand `AUTH` n'est pas annonce ;
-8. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
+8. `tests/sendmail_test.php` : le transport local parle a un faux MTA qui enregistre les
+   arguments recus et ce qu'il lit sur stdin. Verifie que les arguments sont une liste
+   (`-t -i -f <adresse>`, jamais une chaine de commande), que le message arrive en CRLF tel
+   quel, qu'une adresse avec un retour a la ligne est refusee avant de lancer le MTA, et
+   qu'un code nonzero du MTA est signale comme un echec ;
+9. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
    le PNG decode par zxing et la ceremony WebAuthn par HTTP.
 
 Les tests ecrivent dans `QLIP_OUT` (defaut `/tmp/opencode/badge`) et utilisent

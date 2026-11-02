@@ -33,6 +33,7 @@ src/Qr/          encodeur QR (Reed-Solomon, masks, penalites) + rendus SVG/PNG/A
 src/Stl/         Mesh, Triangulator, Design, Badge, StlWriter, ThreeMfWriter
 src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Verifier
 src/Support/     helpers (base64url, echappement, jetons) + ZipWriter + client SMTP (TLS)
+                 + remise au MTA local (arguments en liste, jamais une chaine de commande)
 templates/       vues HTML
 tests/           suite de tests (PHP + Python) + Containerfile
 deploy/          conf exemple Apache (vhost + PHP-FPM) et nginx
@@ -78,6 +79,10 @@ fichier, dans le namespace `Qlip\...`.
   guillemet, ni octet de controle. Le meme filtre s applique aux en-tetes d email et aux
   adresses envoyees a SMTP : une adresse avec un retour a la ligne est une injection dans
   la commande ;
+- le transport local (`src/Support/Sendmail.php`) ne lance pas de shell : les arguments sont
+  une liste, et le message part sur stdin. Une adresse est validee avant, donc elle ne peut
+  pas devenir une option (`-f`) ni une commande. Pas de TLS ici : la confiance vient de la
+  machine, et il n'y a pas de mot de passe a journaliser ;
 - le client SMTP (`src/Support/Smtp.php`, ecrit a la main, pas de PHPMailer) ne doit jamais
   desactiver la verification du certificat, et le mot de passe ne doit apparaitre ni dans le
   transcript ni dans le journal.
@@ -95,8 +100,9 @@ php -S 127.0.0.1:8080 public/router.php     # ou : QLIP_PORT=8080 ./bin/serve.sh
 
 Configuration par variables d'environnement, documentees dans le README
 (`QLIP_DB`, `QLIP_VAR`, `QLIP_BASE_URL`, `QLIP_RP_ID`, `QLIP_ORIGINS`,
-`QLIP_ADMIN_EMAILS`, `QLIP_DAILY_LIMIT`, `QLIP_MAIL_TRANSPORT`, `QLIP_SECURE_COOKIES`,
-`QLIP_ATTESTATION_ROOTS`). Elles sont lues par `env()` dans `src/Support/helpers.php` :
+`QLIP_ADMIN_EMAILS`, `QLIP_DAILY_LIMIT`, `QLIP_MAIL_TRANSPORT`, `QLIP_SMTP_*`,
+`QLIP_SENDMAIL`, `QLIP_SECURE_COOKIES`, `QLIP_ATTESTATION_ROOTS`). Elles sont lues par
+`env()` dans `src/Support/helpers.php` :
 `getenv()`, puis `$_SERVER`, puis `$_ENV`, y compris avec le prefixe `REDIRECT_` quand la
 requete est reecrite. Ne pas revenir a `getenv()` seul : sous PHP-FPM, `SetEnv` d'Apache
 n'arrive que dans `$_SERVER`.
