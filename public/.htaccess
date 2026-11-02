@@ -1,0 +1,27 @@
+# Apache : le front controller. Tout ce qui n'est pas un fichier ou un dossier reel
+# passe par index.php. Sans ces regles, /login, /register, /p/{slug}, /badges/...
+# renvoient 404 : Apache ne trouve pas de fichier de ce nom.
+#
+# La racine du site doit etre le dossier public/ : src/, templates/, data/ et var/
+# restent hors du document root.
+
+Options -Indexes
+
+RewriteEngine On
+
+# A decommenter si l'application est dans un sous-dossier (par exemple RewriteBase /qlip).
+# RewriteBase /
+
+# Variables d'environnement de l'app. Sous mod_php, SetEnv atteint getenv() ; avec
+# PHP-FPM, il faut les mettre dans l'environment du pool. Sans QLIP_BASE_URL, l'app part
+# de http://localhost:8080 : le contenu des QR pointe sur localhost et WebAuthn refuse
+# l'origine. A adapter au nom de domaine.
+SetEnv QLIP_BASE_URL https://qlip.tigro.fr
+SetEnv QLIP_SECURE_COOKIES 1
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+# A garder si la racine du site est le depot entier : ces dossiers ne sont pas des pages.
+RewriteRule ^(src|templates|data|var|tests)/ - [F,L]

@@ -36,6 +36,19 @@ Configuration par variables d'environnement :
 | `QLIP_SECURE_COOKIES` | `0` | cookie `Secure` (mettre a 1 derriere HTTPS) |
 | `QLIP_ATTESTATION_ROOTS` | vide | PEM de racines pour verifier une attestation `packed` |
 
+## Deploiement
+
+La racine du site doit etre `public/` : `src/`, `templates/`, `data/` et `var/` restent
+hors du document root. Sous Apache, `public/.htaccess` envoie tout ce qui n'est pas un
+fichier ou un dossier vers `index.php` ; sans ces regles, `/login`, `/register` et
+`/p/{slug}` renvoient 404 parce qu'Apache ne trouve pas de fichier de ce nom.
+
+Les variables `QLIP_*` se posent avec `SetEnv` dans le `.htaccess` sous mod_php (avec
+PHP-FPM, il faut les mettre dans l'environment du pool). `QLIP_BASE_URL` doit etre l'URL
+publique : elle sert au contenu des QR et a l'origine acceptee par WebAuthn, et
+`QLIP_SECURE_COOKIES=1` se met derriere HTTPS. WebAuthn exige un contexte sur : HTTPS, ou
+`localhost`.
+
 ## Emails
 
 Pas de SMTP ici : le transport ecrit un message `.eml` dans `var/outbox` et journalise
