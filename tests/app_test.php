@@ -115,6 +115,36 @@ $token = (string) $app->db->one('SELECT token FROM verify_tokens WHERE user_id =
 
 check('jeton de verification', strlen($token) === 64, $token);
 
+// 2b. Transport smtp : rien n'est ecrit dans l outbox, le lien n'est pas affiche
+// (sinon n'importe qui activerait le compte qu'il vient de creer) et l'echec d envoi est
+// signale. Ici rien n'ecoute sur le port : le refus est attendu.
+$smtpConfig = new Config([
+    'db_path' => $config->dbPath,
+    'var_path' => $config->varPath,
+    'base_url' => $config->baseUrl,
+    'mail_transport' => 'smtp',
+    'smtp_host' => '127.0.0.1',
+    'smtp_port' => 2599,
+    'smtp_user' => 'app@qlip.test',
+    'smtp_pass' => 'mot-de-passe',
+    'smtp_from' => 'app@qlip.test',
+]);
+
+$smtpApp = new App($smtpConfig);
+$smtpApp->session = new Session(['token' => random_token(16)], true);
+
+$response = qlip_routes($smtpApp)->dispatch(new Request('POST', '/register', [], [
+    'email' => 'normal@qlip.test',
+    'password' => 'mot-de-passe-long',
+    'csrf' => $smtpApp->session->token(),
+]));
+
+$body = $response->body();
+
+check('envoi smtp refuse par le serveur et signale', $response->status() === 200 && str_contains($body, 'flash-err') && str_contains($body, 'refusee'), trim((string) preg_replace('/\s+/', ' ', strip_tags($body))));
+check('lien masque quand le transport est smtp', !str_contains($body, '/verify/'), '');
+check('pas de copie dans l outbox en smtp', count(glob($config->varPath . '/outbox/*.eml') ?: []) === 1, (string) count(glob($config->varPath . '/outbox/*.eml') ?: []));
+
 // 3. Connexion refusee avant verification
 check('connexion avant verification', $send('POST', '/login', ['email' => 'admin@qlip.test', 'password' => 'mot-de-passe-long'])->status() === 401);
 

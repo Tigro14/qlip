@@ -204,7 +204,8 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
 5. `tests/webauthn_fixture.py` + `tests/webauthn_check.php` : faux authenticateur
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
-   pages, quotas par compte, exports etancheite, CSRF, ceremony WebAuthn par la route) ;
+   pages, quotas par compte, exports etancheite, CSRF, ceremony WebAuthn par la route,
+   transport smtp : lien masque et echec d envoi signale) ;
 7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
    serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
    `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
