@@ -35,6 +35,7 @@ src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Verifier
 src/Support/     helpers (base64url, echappement, jetons) + ZipWriter
 templates/       vues HTML
 tests/           suite de tests (PHP + Python) + Containerfile
+deploy/          conf exemple Apache (vhost + PHP-FPM) et nginx
 ```
 
 Un nouveau module va dans le dossier qui correspond a son role, avec une classe par
@@ -69,6 +70,11 @@ fichier, dans le namespace `Qlip\...`.
 
 ## Lancer
 
+En production, l'app est servie par Apache ou nginx avec PHP-FPM : document root =
+`public/`, et tout ce qui n'est pas un fichier ou un dossier reel est envoye a
+`public/index.php`. Conf exemple dans `deploy/`. Il n'y a pas de serveur autonome :
+le serveur PHP integre est reserve au developpement local et aux tests.
+
 ```bash
 php -S 127.0.0.1:8080 public/router.php     # ou : QLIP_PORT=8080 ./bin/serve.sh
 ```
@@ -76,7 +82,10 @@ php -S 127.0.0.1:8080 public/router.php     # ou : QLIP_PORT=8080 ./bin/serve.sh
 Configuration par variables d'environnement, documentees dans le README
 (`QLIP_DB`, `QLIP_VAR`, `QLIP_BASE_URL`, `QLIP_RP_ID`, `QLIP_ORIGINS`,
 `QLIP_ADMIN_EMAILS`, `QLIP_DAILY_LIMIT`, `QLIP_MAIL_TRANSPORT`, `QLIP_SECURE_COOKIES`,
-`QLIP_ATTESTATION_ROOTS`).
+`QLIP_ATTESTATION_ROOTS`). Elles sont lues par `env()` dans `src/Support/helpers.php` :
+`getenv()`, puis `$_SERVER`, puis `$_ENV`, y compris avec le prefixe `REDIRECT_` quand la
+requete est reecrite. Ne pas revenir a `getenv()` seul : sous PHP-FPM, `SetEnv` d'Apache
+n'arrive que dans `$_SERVER`.
 
 ## Tests
 
@@ -113,6 +122,10 @@ une divergence est un bug a comprendre.
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et
   `normal@qlip.test`.
+- Conf serveur : `PutEnv` n'est pas une directive Apache avec PHP 8, `RewriteBase` n'est pas
+  permise dans un `<VirtualHost>`, et les assets de `public/assets/` sont servis par le
+  serveur web (pas par l'app) : s'ils manquent sur le serveur, la requete part au front
+  controller et l'app repond 404.
 - `tests/qr_compare.py` lit `QLIP_QR_JSON` et `QLIP_WEBAUTHN_JSON` : les regenerer avec
   `tests/webauthn_fixture.py` avant de comparer, un JSON stale provoque de faux ecarts.
 - `php` n'est pas toujours sur le PATH : lancer dans le conteneur (`QLIP_IMAGE`) ou avec le

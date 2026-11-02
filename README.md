@@ -10,6 +10,14 @@ ecrits dans le projet.
 
 ## Lancer
 
+Qlip ne tourne pas en standalone : il est servi par Apache ou nginx avec PHP-FPM, le
+document root etant `public/`, et tout ce qui n'est pas un fichier ou un dossier reel est
+envoye a `public/index.php` (le front controller). Exemples de conf : `deploy/apache.conf`
+et `deploy/nginx.conf`.
+
+Le serveur PHP integre est un outil de developpement local (c'est aussi celui qu'utilise
+`tests/http_test.py`) :
+
 ```bash
 php -S 127.0.0.1:8080 public/router.php     # ou : QLIP_PORT=8080 ./bin/serve.sh
 ```
@@ -36,20 +44,26 @@ Configuration par variables d'environnement :
 | `QLIP_SECURE_COOKIES` | `0` | cookie `Secure` (mettre a 1 derriere HTTPS) |
 | `QLIP_ATTESTATION_ROOTS` | vide | PEM de racines pour verifier une attestation `packed` |
 
-## Deploiement
+## Deploiement (Apache ou nginx + PHP-FPM)
 
-La racine du site doit etre `public/` : `src/`, `templates/`, `data/` et `var/` restent
-hors du document root. Sous Apache, `public/.htaccess` envoie tout ce qui n'est pas un
-fichier ou un dossier vers `index.php` ; sans ces regles, `/login`, `/register` et
-`/p/{slug}` renvoient 404 parce qu'Apache ne trouve pas de fichier de ce nom. Les assets
-statiques sont servis par Apache : si `public/assets/` n'est pas sur le serveur, la
-requete est reecrite vers le front controller et l'app repond 404.
+Le document root doit etre `public/` : `src/`, `templates/`, `data/` et `var/` restent hors
+du document root, et `data/` et `var/` doivent etre accessibles en écriture par le processeur
+PHP. Le front controller est `public/index.php` : la reecriture doit envoyer tout ce qui
+n'est pas un fichier ou un dossier reel vers ce fichier, sinon `/login`, `/register` et
+`/p/{slug}` renvoient le 404 du serveur. Les assets (`public/assets/`) sont servis par le
+serveur web, pas par l'app : si le dossier n'est pas sur le serveur, la requete part au
+front controller et l'app repond 404.
 
-Les variables `QLIP_*` se posent avec `SetEnv` dans le `.htaccess` ou dans le vhost :
-l'app les lit depuis `getenv()`, `$_SERVER` et `REDIRECT_*` (Apache met les valeurs de
-`SetEnv` dans `$_SERVER`, avec le prefixe `REDIRECT_` quand la requete est reecrite).
-`PutEnv` n'est plus une directive Apache valide avec PHP 8, et `RewriteBase` n'est pas
-permise dans un `<VirtualHost>` : dans un vhost, la regle s'ecrit sans `RewriteBase`.
+Apache : `SetEnv` dans le vhost ou dans `public/.htaccess`. `PutEnv` n'est plus une directive
+Apache avec PHP 8 (et ne fonctionne pas avec PHP-FPM), et `RewriteBase` n'est pas permise
+dans un `<VirtualHost>` : la regle s'ecrit sans `RewriteBase`. nginx : pas de `SetEnv`, les
+variables se mettent dans le pool PHP-FPM (`clear_env = no`, `env[QLIP_BASE_URL] = ...`) ou
+en `fastcgi_param`.
+
+L'app lit les variables dans `getenv()`, `$_SERVER` et `$_ENV`, y compris avec le prefixe
+`REDIRECT_` quand la requete est reecrite : c'est ce qui fait fonctionner `SetEnv` sous
+Apache et `fastcgi_param` sous nginx.
+
 `QLIP_BASE_URL` doit etre l'URL publique : elle sert au contenu des QR et a l'origine
 acceptee par WebAuthn, et `QLIP_SECURE_COOKIES=1` se met derriere HTTPS. WebAuthn exige un
 contexte sur : HTTPS, ou `localhost`.

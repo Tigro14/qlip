@@ -7,6 +7,10 @@ parcours reel : inscription, lien de verification, connexion, pages, QR en PNG
 et 3MF, CSRF, en-tetes de securite, ceremonies WebAuthn avec le faux
 authenticateur de tests/webauthn_fixture.py.
 
+Le serveur PHP integre joue le role du serveur web de production (Apache ou nginx
++ PHP-FPM) : les fichiers reels sont servis directement, le reste va au front
+controller. C'est la repartition de deploy/apache.conf et deploy/nginx.conf.
+
 Usage : python3 tests/http_test.py
 """
 
