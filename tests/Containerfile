@@ -1,0 +1,11 @@
+FROM docker.io/library/php:8.5-cli
+
+# Deps des scripts de contre-verification Python (qrcode + zxing-cpp + Pillow + cryptography)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip \
+    && pip3 install --no-cache-dir --break-system-packages qrcode pillow zxing-cpp cryptography \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+CMD ["php", "tests/qr_dump.php"]
