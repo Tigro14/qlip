@@ -59,6 +59,8 @@ final class AuthController
             'link' => $result['link'],
             'transport' => $this->app->mailer->transport(),
             'path' => $result['mail']['path'],
+            'ok' => (bool) $result['mail']['ok'],
+            'error' => (string) $result['mail']['error'],
         ]));
     }
 

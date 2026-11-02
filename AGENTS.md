@@ -32,7 +32,7 @@ src/Services/    Users, Badges, Credentials, Mailer
 src/Qr/          encodeur QR (Reed-Solomon, masks, penalites) + rendus SVG/PNG/ASCII
 src/Stl/         Mesh, Triangulator, Design, Badge, StlWriter, ThreeMfWriter
 src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Verifier
-src/Support/     helpers (base64url, echappement, jetons) + ZipWriter
+src/Support/     helpers (base64url, echappement, jetons) + ZipWriter + client SMTP (TLS)
 templates/       vues HTML
 tests/           suite de tests (PHP + Python) + Containerfile
 deploy/          conf exemple Apache (vhost + PHP-FPM) et nginx
@@ -75,7 +75,12 @@ fichier, dans le namespace `Qlip\...`.
   serveur (`Badges::cleanFields()`, `Design::fromArray()`) : le `maxlength` d'un formulaire
   n'est pas une protection ;
 - un en-tete (`Location`, `Content-Disposition`) ne recoit ni retour a la ligne, ni
-  guillemet, ni octet de controle.
+  guillemet, ni octet de controle. Le meme filtre s applique aux en-tetes d email et aux
+  adresses envoyees a SMTP : une adresse avec un retour a la ligne est une injection dans
+  la commande ;
+- le client SMTP (`src/Support/Smtp.php`, ecrit a la main, pas de PHPMailer) ne doit jamais
+  desactiver la verification du certificat, et le mot de passe ne doit apparaitre ni dans le
+  transcript ni dans le journal.
 
 ## Lancer
 

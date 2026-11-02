@@ -40,7 +40,14 @@ Configuration par variables d'environnement :
 | `QLIP_ORIGINS` | `QLIP_BASE_URL` | origines acceptees (liste separee par des virgules) |
 | `QLIP_ADMIN_EMAILS` | vide | comptes administrateurs (liste separee par des virgules) |
 | `QLIP_DAILY_LIMIT` | `10` | creations de badge par jour et par compte |
-| `QLIP_MAIL_TRANSPORT` | `outbox` | `outbox`, `log` ou `null` |
+| `QLIP_MAIL_TRANSPORT` | `outbox` | `outbox`, `log`, `null` ou `smtp` |
+| `QLIP_SMTP_HOST` | vide | serveur SMTP, en TLS implicite |
+| `QLIP_SMTP_PORT` | `465` | port SMTP (465 = TLS implicite) |
+| `QLIP_SMTP_USER` | vide | identifiant (la boite MAIL, chez la plupart des hebergeurs) |
+| `QLIP_SMTP_PASS` | vide | mot de passe, lu seulement dans l'environnement |
+| `QLIP_SMTP_FROM` | `QLIP_SMTP_USER` | adresse d'envoi, aussi utilisee dans l'enveloppe |
+| `QLIP_SMTP_CAFILE` | vide | liste de racines, sinon celle du systeme |
+| `QLIP_SMTP_HELLO` | `localhost` | nom donne a `EHLO` |
 | `QLIP_SECURE_COOKIES` | `0` | cookie `Secure` (mettre a 1 derriere HTTPS) |
 | `QLIP_ATTESTATION_ROOTS` | vide | PEM de racines pour verifier une attestation `packed` |
 
@@ -73,10 +80,22 @@ contexte sur : HTTPS, ou `localhost`.
 
 ## Emails
 
-Pas de SMTP ici : le transport ecrit un message `.eml` dans `var/outbox` et journalise
-chaque envoi dans `var/log/mail.log`. Le lien de verification est donc visible dans la
-page d'inscription et dans les fichiers de l'outbox. `QLIP_MAIL_TRANSPORT=log` ne fait
-que journaliser, `null` ne fait rien.
+Quatre transports, choisis par `QLIP_MAIL_TRANSPORT` :
+
+- `outbox` (defaut) : le message est ecrit en `.eml` dans `var/outbox`. C'est le seul qui
+  permet de lire le lien sans serveur mail, donc le seul utilise par les tests ;
+- `log` : journalise seulement ;
+- `null` : ne fait rien ;
+- `smtp` : envoi reel, par le client ecrit a la main dans `src/Support/Smtp.php`. Pas de
+  dependance, donc pas de PHPMailer : `EHLO`, `AUTH LOGIN`, `MAIL FROM`, `RCPT TO`, `DATA`,
+  `QUIT`, ecrits en CRLF, avec le point de debut de ligne double (sinon le serveur croirait
+  que le corps est termine).
+
+En SMTP, la connexion est en TLS implicite (port 465) et la verification du certificat est
+toujours active : sans elle, le mot de passe partirait vers un serveur non identifie. Le mot
+de passe n'est jamais ecrit dans le journal, et la page d'inscription ne montre plus le lien
+de verification quand le transport est `smtp` : il est seulement dans le message envoye.
+Aucune copie `.eml` n'est ecrite pour ce transport, le journal (`var/log/mail.log`) suffit.
 
 L'inscription exige un email verifie : sans verification, le tableau de bord et la
 creation de badge renvoient 403. Les tentatives de connexion sont limitees a 8 par
@@ -186,7 +205,12 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    pages, quotas par compte, exports etancheite, CSRF, ceremony WebAuthn par la route) ;
-7. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
+7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
+   serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
+   `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
+   le client reagite : certificat refuse sans liste de confiance, arret apres un 535, refus
+   quand `AUTH` n'est pas annonce ;
+8. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
    le PNG decode par zxing et la ceremony WebAuthn par HTTP.
 
 Les tests ecrivent dans `QLIP_OUT` (defaut `/tmp/opencode/badge`) et utilisent

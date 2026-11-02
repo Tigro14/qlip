@@ -30,7 +30,7 @@ final class App
         $this->db = new Db($this->config->dbPath);
         $this->view = new View(dirname(__DIR__, 2) . '/templates');
         $this->session = new Session();
-        $this->mailer = new Mailer($this->config->mailTransport, $this->config->varPath);
+        $this->mailer = new Mailer($this->config->mailTransport, $this->config->varPath, $this->config->smtp);
 
         $this->users = new Users($this->db, $this->mailer, $this->config->baseUrl);
         $this->badges = new Badges($this->db, $this->config->dailyLimit, $this->config->baseUrl);

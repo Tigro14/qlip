@@ -47,6 +47,25 @@ fi
     QLIP_WEBAUTHN_JSON="$QLIP_OUT/webauthn.json" php tests/webauthn_check.php
 
     echo
+    echo "== SMTP (client ecrit a la main, serveur mock TLS) =="
+    rm -f "$QLIP_OUT/smtp_ready"
+    python3 tests/smtp_mock.py &
+    mock=$!
+
+    # Le mock ecrit smtp_ready quand il ecoute : sans attendre, le script PHP peut partir
+    # avant et voir seulement des connections refusees.
+    for attempt in $(seq 1 40); do
+        [ -f "$QLIP_OUT/smtp_ready" ] && break
+        sleep 0.5
+    done
+
+    php_status=0
+    mock_status=0
+    php tests/smtp_test.php || php_status=$?
+    wait "$mock" || mock_status=$?
+    [ $(( php_status + mock_status )) -eq 0 ]
+
+    echo
     echo "== Application (routes, quotas, exports) =="
     QLIP_WEBAUTHN_JSON="$QLIP_OUT/webauthn.json" php tests/app_test.php
 
