@@ -192,6 +192,24 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
 Les tests ecrivent dans `QLIP_OUT` (defaut `/tmp/opencode/badge`) et utilisent
 `QLIP_PHP` pour le binaire PHP, `QLIP_IMAGE` pour l'image podman.
 
+## Tests en conditions reelles
+
+```bash
+./tests/live.sh                                                     # lecture seule
+QLIP_LIVE_EMAIL=... QLIP_LIVE_PASSWORD=... QLIP_LIVE_WRITE=1 ./tests/live.sh
+```
+
+`tests/live_test.py` ne remplace pas la suite : il verifie ce qu'elle ne peut pas
+verifier parce que cela depend du serveur web (reecriture, variables d'environnement
+arrivees a PHP, cookie `Secure`, assets servis par le serveur et non par l'app,
+dossiers hors document root, origine WebAuthn, HSTS). Le test s'appuie sur un signe
+distinctif : une reponse de l'app est en utf-8 avec la CSP, une reponse du serveur web
+n'a pas de CSP.
+
+La partie authentifiee est facultative et ecrite en base (l'app n'a pas de suppression,
+le slug cree est `livecheck`) : a lancer avec un compte de test, pas avec le compte
+administrateur.
+
 ## Organisation
 
 ```
