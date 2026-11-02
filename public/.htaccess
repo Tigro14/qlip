@@ -23,5 +23,9 @@ RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^ index.php [QSA,L]
 
+# Si mod_rewrite n'est pas active sur l'hebergement, cette ligne fait le meme travail
+# (il faut alors commenter le bloc RewriteEngine ci-dessus) :
+# FallbackResource /index.php
+
 # A garder si la racine du site est le depot entier : ces dossiers ne sont pas des pages.
 RewriteRule ^(src|templates|data|var|tests)/ - [F,L]
