@@ -15,6 +15,7 @@ corriger (document root, SetEnv, asset manquant, HSTS absent).
 
 Usage :
   QLIP_LIVE_URL=https://qlip.tigro.fr python3 tests/live_test.py
+  QLIP_LIVE_TRANSPORT=smtp python3 tests/live_test.py
   QLIP_LIVE_EMAIL=... QLIP_LIVE_PASSWORD=... QLIP_LIVE_WRITE=1 python3 tests/live_test.py
 """
 
@@ -43,6 +44,7 @@ HOST = urllib.parse.urlparse(BASE).netloc
 EMAIL = os.environ.get("QLIP_LIVE_EMAIL", "")
 PASSWORD = os.environ.get("QLIP_LIVE_PASSWORD", "")
 WRITE = os.environ.get("QLIP_LIVE_WRITE", "0") == "1"
+TRANSPORT = os.environ.get("QLIP_LIVE_TRANSPORT", "outbox")
 TIMEOUT = 20
 AGENT = "qlip-live-check"
 
@@ -213,6 +215,13 @@ def run():
     status, _, _ = raw(anonymous, "POST", "/health")
 
     check("methode refusee", status == 405, str(status))
+
+    # Le transport affiche sur la page d inscription est celui que PHP lit vraiment :
+    # c'est la seule facon de savoir si SetEnv arrive jusqu'a l'app sans ecrire en base.
+    status, _, body = get("/register", anonymous)
+    shown = re.search(rb"transport est\s*<code>([^<]+)</code>", body)
+
+    check("transport email lu par PHP", status == 200 and shown is not None and shown.group(1).decode() == TRANSPORT, shown.group(1).decode() if shown else text(body)[:60])
 
     if not WRITE:
         print("\npartie authentifiee non lancee : QLIP_LIVE_WRITE=1 avec un compte de test")
