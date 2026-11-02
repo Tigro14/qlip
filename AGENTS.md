@@ -145,9 +145,11 @@ par le serveur. Il ne remplace pas la suite, et n'ecrit en base qu'avec
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et
   `normal@qlip.test`.
 - Conf serveur : `PutEnv` n'est pas une directive Apache avec PHP 8, `RewriteBase` n'est pas
-  permise dans un `<VirtualHost>`, et les assets de `public/assets/` sont servis par le
-  serveur web (pas par l'app) : s'ils manquent sur le serveur, la requete part au front
-  controller et l'app repond 404.
+  permise dans un `<VirtualHost>`, et la reecriture doit etre dans le meme contexte que le
+  `DocumentRoot` : dans le contexte par serveur, `%{REQUEST_FILENAME}` peut n'etre que l'URI,
+  donc le test `!-f` ne voit pas les fichiers reels et les assets partent au front controller.
+  Les assets de `public/assets/` sont servis par le serveur web (pas par l'app) : s'ils
+  manquent sur le serveur, la requete part au front controller et l'app repond 404.
 - `tests/qr_compare.py` lit `QLIP_QR_JSON` et `QLIP_WEBAUTHN_JSON` : les regenerer avec
   `tests/webauthn_fixture.py` avant de comparer, un JSON stale provoque de faux ecarts.
 - `php` n'est pas toujours sur le PATH : lancer dans le conteneur (`QLIP_IMAGE`) ou avec le
