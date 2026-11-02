@@ -41,7 +41,9 @@ Configuration par variables d'environnement :
 La racine du site doit etre `public/` : `src/`, `templates/`, `data/` et `var/` restent
 hors du document root. Sous Apache, `public/.htaccess` envoie tout ce qui n'est pas un
 fichier ou un dossier vers `index.php` ; sans ces regles, `/login`, `/register` et
-`/p/{slug}` renvoient 404 parce qu'Apache ne trouve pas de fichier de ce nom.
+`/p/{slug}` renvoient 404 parce qu'Apache ne trouve pas de fichier de ce nom. Les assets
+statiques sont servis par Apache : si `public/assets/` n'est pas sur le serveur, la
+requete est reecrite vers le front controller et l'app repond 404.
 
 Les variables `QLIP_*` se posent avec `SetEnv` dans le `.htaccess` ou dans le vhost :
 l'app les lit depuis `getenv()`, `$_SERVER` et `REDIRECT_*` (Apache met les valeurs de
