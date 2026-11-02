@@ -62,6 +62,51 @@ Le navigateur fait la ceremony (`navigator.credentials`), PHP verifie :
 La page `/admin` n'est accessible qu'avec une session confirmee par une assertion
 (`webauthn_at` en session), sur un compte marque administrateur.
 
+### Enrolement initial de la YubiKey
+
+L'enrolement se fait une fois par cle et par origine, dans un navigateur : c'est le
+navigateur qui parle au token, PHP ne fait que verifier la reponse. La ceremony
+`navigator.credentials` est impossible en ligne de commande.
+
+1. Le compte administrateur est celui dont l'adresse est dans `QLIP_ADMIN_EMAILS` : il
+   est cree marque `is_admin = 1` a l'inscription, et l'email doit etre verifie pour que
+   la connexion soit acceptee (avec le transport `outbox`, le lien est dans
+   `var/outbox/*.eml`).
+
+   ```bash
+   QLIP_ADMIN_EMAILS=ton@email.example QLIP_BASE_URL=https://qlip.example \
+       QLIP_SECURE_COOKIES=1 php -S 127.0.0.1:8080 public/router.php
+   ```
+
+2. Le navigateur doit etre dans un contexte sur : HTTPS, ou `http://localhost`. Une page
+   servie par une IP ou par un nom d'hote different fait echouer la ceremony. Le RP ID
+   doit correspondre a l'origine : par defaut l'hote de `QLIP_BASE_URL` (`QLIP_RP_ID`),
+   liste acceptee dans `QLIP_ORIGINS`. Une cle enregistree sur `localhost` n'est pas
+   recevable sur un nom de domaine, il faut l'enregistrer a nouveau.
+
+3. Connecte-toi avec le mot de passe (`/login`), puis ouvre `/admin/yubikey` : le bouton
+   `Enregistrer la YubiKey` est affiche pour un compte administrateur. Touche le token
+   (ou donne son PIN) quand le navigateur le demande : `userVerification` est `required`
+   et `residentKey` est `preferred`, donc la cle est decouvrable et pourra retrouver le
+   compte sans mot de passe ensuite.
+
+4. La ceremony `navigator.credentials.create()` envoie l'attestation en base64url a
+   `POST /webauthn/register` : les formats acceptes sont `none` et `packed` (une
+   reponse `fido-u2f`, `android-key` ou `apple` est refusee). La cle COSE, l'ID de
+   credential et le compteur sont stockes en base. Avec `QLIP_ATTESTATION_ROOTS` (PEM
+   d'une racine, par exemple le certificat racine de Yubico), la chaine `x5c` est remontee
+   jusqu'a cette racine ; sans elle, `packed` avec `x5c` est accepte comme une declaration.
+
+5. Puis `Presente la YubiKey` (`POST /webauthn/assert`) : la session est marquee
+   `webauthn_at`, et `/admin` devient accessible. Tant que cette marque n'existe pas,
+   `/admin` renvoie a la page d'enrolement. Le compteur de signature doit etre
+   strictement croissant, et la meme assertion n'est pas acceptee deux fois.
+
+En resume : inscription avec l'adresse d'administration, verification d'email, connexion
+par mot de passe, enregistrement de la cle, assertion, `/admin`. Le mot de passe ne sert
+plus ensuite qu'a enregistrer une autre cle (bouton `Enregistrer une YubiKey` sur la page
+d'administration) ou a reprendre la main si la cle est perdue.
+
 ## Badges STL
 
 Un badge est une plaque arrondie avec un trou, et le QR code en relief ou grave.
@@ -117,3 +162,7 @@ tests/           suite de tests (PHP + Python)
 
 Le routeur est extrait dans `src/routes.php` (`qlip_routes(App $app)`) pour que les tests
 puissent dispatcher sans serveur HTTP.
+
+## Licence
+
+MIT, voir `LICENSE`.

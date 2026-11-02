@@ -312,6 +312,8 @@ def run():
 
     check("page YubiKey", status == 200)
 
+    check("bouton d enrolement pour un admin", b'data-action="register"' in body)
+
     csrf = csrf_of(body)
 
     status, headers, _ = get("/admin")
@@ -381,7 +383,11 @@ def run():
 
     check("connexion normal", status == 302)
 
-    csrf = csrf_of(get("/admin/yubikey")[2])
+    status, _, body = get("/admin/yubikey")
+
+    check("pas de bouton d enrolement pour un non admin", status == 200 and b'data-action="register"' not in body)
+
+    csrf = csrf_of(body)
     status, ceremony = get_json("/webauthn/challenge")
 
     normal = FakeAuthenticator(b"claie-normal")

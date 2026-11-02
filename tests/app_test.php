@@ -282,6 +282,17 @@ if (!is_array($fixtures)) {
 
     $app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
 
+    // La page d'enrolement est le seul endroit ou la premiere credential est
+    // enregistree : elle doit proposer le bouton pour un compte administrateur, et
+    // `/admin` renvoie encore a cette page tant qu'aucune assertion n'a ete faite.
+    $response = $send('GET', '/admin/yubikey');
+
+    check('bouton d enrolement pour un admin', str_contains($response->body(), 'data-action="register"'));
+
+    $response = $send('GET', '/admin');
+
+    check('admin bloque avant la premiere assertion', str_contains($response->header('Location') ?? '', '/admin/yubikey'));
+
     // Le challenge de la fixture doit etre celui stocke en session.
     $app->session->set('challenge', $fixtures['challenge']);
 

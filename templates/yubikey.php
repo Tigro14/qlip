@@ -5,6 +5,8 @@
         La page d'administration est protegee par une credential WebAuthn.
         Connecte-toi d'abord avec le mot de passe, puis presente la YubiKey ; ou
         utilise directement une credential residente (la YubiKey choisit le compte).
+        La premiere fois : enregistre la cle, puis presente-la (l'enregistrement se fait
+        avec la session, pas avec une assertion).
     </p>
 
     <?php if ($user === null): ?>
@@ -23,6 +25,10 @@
          data-rp="<?= e($rpId ?? '') ?>"
          data-base="<?= url('') ?>"
          data-user="<?= e(json_field($user === null ? null : ['id' => (string) $user['id'], 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
+        <?php if ($user !== null && (int) ($user['is_admin'] ?? 0) === 1): ?>
+            <button type="button" data-action="register">Enregistrer la YubiKey</button>
+        <?php endif; ?>
+
         <button type="button" data-action="assert">Presente la YubiKey</button>
 
         <?php if ($credentials !== []): ?>
