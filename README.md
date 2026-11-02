@@ -204,7 +204,9 @@ verifier parce que cela depend du serveur web (reecriture, variables d'environne
 arrivees a PHP, cookie `Secure`, assets servis par le serveur et non par l'app,
 dossiers hors document root, origine WebAuthn, HSTS). Le test s'appuie sur un signe
 distinctif : une reponse de l'app est en utf-8 avec la CSP, une reponse du serveur web
-n'a pas de CSP.
+n'a pas de CSP. Chaque ligne indique laquelle des deux a repondu, et la sonde
+`/.htaccess` (fichier reel du depot, a la racine du document root) permet de savoir si
+le dossier servi est bien le depot : si l'app repond en 404, le fichier manque.
 
 La partie authentifiee est facultative et ecrite en base (l'app n'a pas de suppression,
 le slug cree est `livecheck`) : a lancer avec un compte de test, pas avec le compte

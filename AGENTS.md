@@ -119,7 +119,9 @@ une divergence est un bug a comprendre.
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web
 (reecriture, variables d'environnement, assets, dossiers hors document root, cookie
-`Secure`, origine WebAuthn). Il ne remplace pas la suite, et n'ecrit en base qu'avec
+`Secure`, origine WebAuthn). Une reponse de l'app se reconnait a la CSP : la sonde
+`/.htaccess` sert a distinguer un fichier absent du dossier servi d'un fichier refuse
+par le serveur. Il ne remplace pas la suite, et n'ecrit en base qu'avec
 `QLIP_LIVE_WRITE=1` (l'app n'a pas de suppression : a faire avec un compte de test).
 
 ## Points connus, ne pas "corriger"

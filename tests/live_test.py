@@ -118,6 +118,15 @@ def file_hash(path):
         return hashlib.sha256(handle.read()).hexdigest()
 
 
+def answered_by_app(headers):
+    """Une reponse de l'app porte la CSP ; une reponse produite par le serveur web ne l'a pas."""
+    return "content-security-policy" in headers
+
+
+def origin(headers):
+    return "reponse de l'app" if answered_by_app(headers) else "reponse du serveur"
+
+
 def run():
     print("instance : %s" % BASE)
 
@@ -158,8 +167,9 @@ def run():
         cookie,
     )
 
-    # 3. Assets : servis par le serveur web. Un 404 de l'app (utf-8 + CSP) veut dire que
-    # le dossier n'est pas sur le serveur.
+    # 3. Assets : ils sont servis par le serveur web. Un 404 de l'app veut dire que le
+    # fichier n'est pas trouve par le serveur : il manque dans le document root (ou le
+    # document root n'est pas le depot).
     for name, expected in (("app.css", "text/css"), ("app.js", "javascript")):
         status, headers, body = get("/assets/" + name)
         local = os.path.join(ROOT, "public/assets", name)
@@ -168,18 +178,26 @@ def run():
         if ok and os.path.isfile(local):
             ok = hashlib.sha256(body).hexdigest() == file_hash(local)
 
-        check("asset %s" % name, ok, "%d %s" % (status, headers.get("content-type", "")))
+        check("asset %s" % name, ok, "%d %s -> %s" % (status, headers.get("content-type", ""), origin(headers)))
+
+    # 3b. Sonde : .htaccess est un fichier reel du depot, a la racine du document root.
+    # Le serveur doit le refuser par sa propre configuration (403, sans CSP). Une 404 de
+    # l'app veut dire que le fichier n'est pas trouve : le document root n'est pas le
+    # depot, et c'est la meme cause que les assets manquants.
+    status, headers, body = get("/.htaccess")
+
+    check("sonde document root", status in (403, 404) and b"RewriteEngine" not in body, "%d -> %s" % (status, origin(headers)))
 
     # 4. Ce qui est hors document root ne doit pas etre servi, et jamais du code source.
     for path in ("/src/Db.php", "/templates/layout.php", "/data/qlip.sqlite", "/var/log/mail.log"):
         status, headers, body = get(path)
 
-        check("%s refuse" % path, status in (403, 404) and b"<?php" not in body, "%d %s (%d octets)" % (status, headers.get("content-type", ""), len(body)))
+        check("%s refuse" % path, status in (403, 404) and b"<?php" not in body, "%d %s -> %s" % (status, origin(headers), str(len(body))))
 
     # 5. Comportement applicatif : reecriture, CSRF, acces anonime, methodes.
     status, headers, _ = get("/une-page-qui-n-existe-pas")
 
-    check("404 produit par l'app", status == 404 and "charset=utf-8" in headers.get("content-type", "") and "content-security-policy" in headers, headers.get("content-type", ""))
+    check("404 produit par l'app", status == 404 and answered_by_app(headers), "%d -> %s" % (status, origin(headers)))
 
     status, headers, _ = get("/dashboard", anonymous)
 
