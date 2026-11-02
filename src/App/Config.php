@@ -22,32 +22,32 @@ final class Config
 
     public function __construct(array $values = [])
     {
-        $root = getenv('QLIP_ROOT') ?: dirname(__DIR__, 2);
+        $root = \env('QLIP_ROOT') ?: dirname(__DIR__, 2);
 
-        $this->dbPath = $values['db_path'] ?? (getenv('QLIP_DB') ?: $root . '/data/qlip.sqlite');
-        $this->varPath = $values['var_path'] ?? (getenv('QLIP_VAR') ?: $root . '/var');
-        $this->baseUrl = rtrim($values['base_url'] ?? (getenv('QLIP_BASE_URL') ?: 'http://localhost:8080'), '/');
-        $this->rpId = $values['rp_id'] ?? (getenv('QLIP_RP_ID') ?: parse_url($this->baseUrl, PHP_URL_HOST) ?: 'localhost');
+        $this->dbPath = $values['db_path'] ?? (\env('QLIP_DB') ?: $root . '/data/qlip.sqlite');
+        $this->varPath = $values['var_path'] ?? (\env('QLIP_VAR') ?: $root . '/var');
+        $this->baseUrl = rtrim($values['base_url'] ?? (\env('QLIP_BASE_URL') ?: 'http://localhost:8080'), '/');
+        $this->rpId = $values['rp_id'] ?? (\env('QLIP_RP_ID') ?: parse_url($this->baseUrl, PHP_URL_HOST) ?: 'localhost');
 
-        $origin = getenv('QLIP_ORIGINS');
+        $origin = \env('QLIP_ORIGINS');
 
         if (isset($values['origins'])) {
             $this->origins = array_map('trim', (array) $values['origins']);
         } else {
-            $this->origins = $origin !== false && $origin !== ''
+            $this->origins = $origin !== ''
                 ? array_map('trim', explode(',', $origin))
                 : [$this->baseUrl];
         }
 
-        $this->mailTransport = $values['mail_transport'] ?? (getenv('QLIP_MAIL_TRANSPORT') ?: 'outbox');
-        $this->dailyLimit = (int) ($values['daily_limit'] ?? (getenv('QLIP_DAILY_LIMIT') ?: 10));
+        $this->mailTransport = $values['mail_transport'] ?? (\env('QLIP_MAIL_TRANSPORT') ?: 'outbox');
+        $this->dailyLimit = (int) ($values['daily_limit'] ?? (\env('QLIP_DAILY_LIMIT') ?: 10));
     }
 
     public function rootsPem(): string
     {
-        $path = getenv('QLIP_ATTESTATION_ROOTS');
+        $path = \env('QLIP_ATTESTATION_ROOTS');
 
-        if ($path === false || $path === '' || !is_file($path)) {
+        if ($path === '' || !is_file($path)) {
             return '';
         }
 

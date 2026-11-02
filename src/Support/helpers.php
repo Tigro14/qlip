@@ -44,6 +44,30 @@ function base64url_decode(string $value): string
     return $decoded;
 }
 
+/**
+ * Variable d'environnement. Apache ne la transmet pas de la meme facon selon le module :
+ * PutEnv arrive dans getenv(), SetEnv dans $_SERVER, et une requete reecrite par
+ * mod_rewrite la porte en REDIRECT_*. PHP-FPM ne voit pas PutEnv : il faut l'environment
+ * du pool, ou SetEnv (donc $_SERVER). On lit les trois pour que la conf du vhost marche
+ * dans les deux cas.
+ */
+function env(string $name, string $default = ''): string
+{
+    foreach ([
+        getenv($name),
+        $_SERVER[$name] ?? null,
+        $_ENV[$name] ?? null,
+        $_SERVER['REDIRECT_' . $name] ?? null,
+        $_ENV['REDIRECT_' . $name] ?? null,
+    ] as $value) {
+        if ($value !== null && $value !== false && $value !== '') {
+            return (string) $value;
+        }
+    }
+
+    return $default;
+}
+
 function random_token(int $bytes = 32): string
 {
     return bin2hex(random_bytes($bytes));
@@ -54,7 +78,7 @@ function random_token(int $bytes = 32): string
  */
 function url(string $path = ''): string
 {
-    $base = rtrim((string) (getenv('QLIP_BASE_URL') ?: ''), '/');
+    $base = rtrim(env('QLIP_BASE_URL'), '/');
 
     return $base . '/' . ltrim($path, '/');
 }

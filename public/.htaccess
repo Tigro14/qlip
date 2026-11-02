@@ -12,10 +12,11 @@ RewriteEngine On
 # A decommenter si l'application est dans un sous-dossier (par exemple RewriteBase /qlip).
 # RewriteBase /
 
-# Variables d'environnement de l'app. Sous mod_php, SetEnv atteint getenv() ; avec
-# PHP-FPM, il faut les mettre dans l'environment du pool. Sans QLIP_BASE_URL, l'app part
-# de http://localhost:8080 : le contenu des QR pointe sur localhost et WebAuthn refuse
-# l'origine. A adapter au nom de domaine.
+# Variables d'environnement de l'app. Apache les transmet avec SetEnv (PutEnv n'est plus
+# une directive valide avec PHP 8) : elles arrivent dans $_SERVER, et avec le prefixe
+# REDIRECT_ quand la requete est reecrite. L'app lit les deux. Sans QLIP_BASE_URL, l'app
+# part de http://localhost:8080 : le contenu des QR pointe sur localhost et WebAuthn
+# refuse l'origine. A adapter au nom de domaine.
 SetEnv QLIP_BASE_URL https://qlip.tigro.fr
 SetEnv QLIP_SECURE_COOKIES 1
 

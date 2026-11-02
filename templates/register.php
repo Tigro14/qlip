@@ -23,7 +23,7 @@
 
     <p class="note">
         Un email de verification est envoye. Le transport est
-        <code><?= e(getenv('QLIP_MAIL_TRANSPORT') ?: 'outbox') ?></code> : sans SMTP,
+        <code><?= e(env('QLIP_MAIL_TRANSPORT', 'outbox')) ?></code> : sans SMTP,
         le message est écrit dans <code>var/outbox</code> et journalise dans
         <code>var/log/mail.log</code>.
     </p>

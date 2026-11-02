@@ -46,7 +46,7 @@ final class Session
             'path' => '/',
             'httponly' => true,
             'samesite' => 'Strict',
-            'secure' => (getenv('QLIP_SECURE_COOKIES') ?: '0') === '1',
+            'secure' => \env('QLIP_SECURE_COOKIES', '0') === '1',
         ]);
 
         session_name('qlip_session');

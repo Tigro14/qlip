@@ -141,7 +141,7 @@ final class Users
 
     public function isAdminEmail(string $email): bool
     {
-        $list = array_map('trim', explode(',', (string) (getenv('QLIP_ADMIN_EMAILS') ?: '')));
+        $list = array_map('trim', explode(',', \env('QLIP_ADMIN_EMAILS')));
 
         return in_array(strtolower(trim($email)), $list, true);
     }

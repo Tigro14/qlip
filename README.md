@@ -43,11 +43,14 @@ hors du document root. Sous Apache, `public/.htaccess` envoie tout ce qui n'est 
 fichier ou un dossier vers `index.php` ; sans ces regles, `/login`, `/register` et
 `/p/{slug}` renvoient 404 parce qu'Apache ne trouve pas de fichier de ce nom.
 
-Les variables `QLIP_*` se posent avec `SetEnv` dans le `.htaccess` sous mod_php (avec
-PHP-FPM, il faut les mettre dans l'environment du pool). `QLIP_BASE_URL` doit etre l'URL
-publique : elle sert au contenu des QR et a l'origine acceptee par WebAuthn, et
-`QLIP_SECURE_COOKIES=1` se met derriere HTTPS. WebAuthn exige un contexte sur : HTTPS, ou
-`localhost`.
+Les variables `QLIP_*` se posent avec `SetEnv` dans le `.htaccess` ou dans le vhost :
+l'app les lit depuis `getenv()`, `$_SERVER` et `REDIRECT_*` (Apache met les valeurs de
+`SetEnv` dans `$_SERVER`, avec le prefixe `REDIRECT_` quand la requete est reecrite).
+`PutEnv` n'est plus une directive Apache valide avec PHP 8, et `RewriteBase` n'est pas
+permise dans un `<VirtualHost>` : dans un vhost, la regle s'ecrit sans `RewriteBase`.
+`QLIP_BASE_URL` doit etre l'URL publique : elle sert au contenu des QR et a l'origine
+acceptee par WebAuthn, et `QLIP_SECURE_COOKIES=1` se met derriere HTTPS. WebAuthn exige un
+contexte sur : HTTPS, ou `localhost`.
 
 ## Emails
 

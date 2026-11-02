@@ -391,5 +391,18 @@ if (!is_array($fixtures)) {
     check('journal d audit', $counts === ['register' => 1, 'assert' => 1, 'failed' => 3], json_encode($counts));
 }
 
+// 14. Variables d'environnement : Apache ne les transmet pas de la meme facon selon le
+// module. PutEnv arrive dans getenv(), SetEnv dans $_SERVER, et une requete reecrite par
+// mod_rewrite porte les valeurs en REDIRECT_*. PHP-FPM ne voit pas PutEnv.
+check('env par defaut', env('QLIP_TEST_ABSENT', 'defaut') === 'defaut');
+
+putenv('QLIP_TEST_GETENV=de-getenv');
+$_SERVER['QLIP_TEST_SERVER'] = 'de-server';
+$_SERVER['REDIRECT_QLIP_TEST_REDIR'] = 'de-redirect';
+
+check('env par getenv', env('QLIP_TEST_GETENV') === 'de-getenv');
+check('env par $_SERVER', env('QLIP_TEST_SERVER') === 'de-server');
+check('env par REDIRECT_', env('QLIP_TEST_REDIR') === 'de-redirect');
+
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
 exit($failures === 0 ? 0 : 1);
