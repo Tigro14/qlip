@@ -221,6 +221,12 @@ def run():
     check("en-tete nosniff", headers.get("x-content-type-options") == "nosniff")
     check("en-tete frame", headers.get("x-frame-options") == "DENY")
 
+    status, headers, _ = get("/health")
+
+    # Un JSON rendu par l app doit avoir les memes en-tetes qu une page : sans nosniff,
+    # une reponse JSON mal declaree serait sniffée comme du HTML par le navigateur.
+    check("en-tetes sur une reponse JSON", headers.get("x-content-type-options") == "nosniff", str(status))
+
     # 2. Inscription, email, verification
     status, _, body = post("/register", {"csrf": csrf_of(get("/register")[2]), "email": "admin@qlip.test", "password": "un-mot-de-passe-long"})
 
@@ -244,10 +250,34 @@ def run():
 
     slug = headers.get("location", "").split("/p/")[-1].strip("/")
 
-    check("creation de page", status == 302 and slug == "cles", slug)
+    check("creation de page", status == 302 and slug == "cles", "%d %s" % (status, slug))
     check("page publique", b"Cles trouvees" in get("/p/" + slug)[2])
     check("edition", post("/p/" + slug, {"csrf": csrf, "title": "Cles trouvees", "note": "Modifiee"})[0] == 302)
     check("edition enregistree", b"Modifiee" in get("/p/" + slug)[2])
+
+    # 4b. Echappement et controle des champs. Le maxlength des formulaires n est pas une
+    # protection : on poste directement. Le rendu doit encoder, la taille limite se
+    # applique cote serveur.
+    status, _, body = post("/p/" + slug, {"csrf": csrf, "title": "<script>alert(1)</script>", "note": "<img src=x onerror=alert(1)>"})
+
+    check("XSS accepte en base", status == 302)
+
+    body = get("/p/" + slug)[2]
+
+    check("titre echappe au rendu", b"&lt;script&gt;alert(1)&lt;/script&gt;" in body and b"<script>alert(1)" not in body)
+    check("note echappee au rendu", b"&lt;img src=x onerror=alert(1)&gt;" in body and b"<img src=x onerror=" not in body)
+
+    status, _, body = post("/p/" + slug, {"csrf": csrf, "title": "x" * 81})
+
+    check("titre trop long refuse", status == 422, as_json(body).get("error", ""))
+
+    status, _, body = post("/p/" + slug, {"csrf": csrf, "email_contact": "pas un email"})
+
+    check("email de contact refuse", status == 422, as_json(body).get("error", ""))
+
+    status, headers, body = post("/pages", {"csrf": csrf, "title": "Long slug", "slug": "s" * 60})
+
+    check("slug tronque", status == 302 and len(headers.get("location", "").split("/p/")[-1].strip("/")) == 32)
 
     # 5. Le PNG doit se decoder et redonner l URL de la page
     status, headers, body = get("/qr/" + slug + ".png")
@@ -371,9 +401,19 @@ def run():
     check("rejoue refuse", status == 400, data.get("error", ""))
 
     # 10. Un compte non administrateur est refuse, meme avec une credential
+    status, _, body = post("/logout", {"csrf": "mauvais-jeton"})
+
+    check("deconnexion refusee sans jeton", status == 400, str(as_json(body).get("error", "")))
+
     status, headers, _ = post("/logout", {"csrf": csrf})
 
     check("deconnexion", status == 302)
+
+    # Le cookie porte le nom de la session : destroy() doit l expirer, pas seulement
+    # vider les donnees cote serveur. PHP remplace une valeur vide par "deleted".
+    set_cookie = headers.get("set-cookie", "")
+
+    check("cookie videe a la deconnexion", "qlip_session=" in set_cookie and "1970" in set_cookie, set_cookie)
 
     status, _, body = post("/register", {"csrf": csrf_of(get("/register")[2]), "email": "normal@qlip.test", "password": "un-mot-de-passe-long"})
 

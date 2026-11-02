@@ -125,6 +125,12 @@ final class AuthController
 
     public function logout(Request $request): Response
     {
+        // La deconnexion est un POST : sans le jeton, une page externe peut faire
+        // partir l'utilisateur de sa session (CSRF).
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return Response::html('Jeton CSRF invalide.', 400);
+        }
+
         $this->app->session->destroy();
 
         return Response::redirect($this->app->url('login'));

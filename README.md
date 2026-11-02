@@ -82,6 +82,18 @@ L'inscription exige un email verifie : sans verification, le tableau de bord et 
 creation de badge renvoient 403. Les tentatives de connexion sont limitees a 8 par
 session, puis verrou de 300 secondes.
 
+## Champs des pages
+
+Les champs d une page sont controles cote serveur, pas seulement dans le formulaire :
+titre 80 octets, telephone 40, email de contact 120 (et doit rester une adresse valide),
+note 500. Le `maxlength` d un formulaire n est pas une protection : on peut poster
+directement. Les valeurs sont stockees telles quelles et echappees au rendu par `e()`
+(`attr()` dans les attributs HTML). Le slug est limite a 32 caracteres et reduit a
+`[a-z0-9]`. Les parametres de badge (dimensions, couleurs) sont bornes dans `Design`.
+
+Les requetes SQL sont toutes en prepare, avec params nommes. Les en-tetes de securite sont
+poses sur toutes les reponses, y compris le JSON.
+
 ## YubiKey (WebAuthn)
 
 Le navigateur fait la ceremony (`navigator.credentials`), PHP verifie :

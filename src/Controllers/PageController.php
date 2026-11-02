@@ -85,7 +85,17 @@ final class PageController
             return Response::html('Jeton CSRF invalide.', 400);
         }
 
-        $page = $this->app->badges->createPage((int) $user['id'], $request->body);
+        try {
+            $page = $this->app->badges->createPage((int) $user['id'], $request->body);
+        } catch (\Throwable $error) {
+            if ($request->wantsJson()) {
+                return Response::json(['error' => $error->getMessage()], 422);
+            }
+
+            $this->app->flash($error->getMessage(), 'err');
+
+            return Response::redirect($this->app->url('dashboard'));
+        }
 
         return Response::redirect($this->app->url('p/' . $page['slug']));
     }
@@ -112,7 +122,17 @@ final class PageController
             return Response::html('Page d un autre compte.', 403);
         }
 
-        $this->app->badges->updatePage((int) $page['id'], $request->body);
+        try {
+            $page = $this->app->badges->updatePage((int) $page['id'], $request->body) ?? $page;
+        } catch (\Throwable $error) {
+            if ($request->wantsJson()) {
+                return Response::json(['error' => $error->getMessage()], 422);
+            }
+
+            $this->app->flash($error->getMessage(), 'err');
+
+            return Response::redirect($this->app->url('dashboard'));
+        }
 
         return Response::redirect($this->app->url('p/' . $page['slug']));
     }

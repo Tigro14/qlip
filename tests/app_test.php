@@ -10,11 +10,15 @@ use Qlip\App\Config;
 use Qlip\App\Request;
 use Qlip\App\Response;
 use Qlip\App\Session;
+use Qlip\Stl\Design;
+use Qlip\Stl\StlWriter;
+use Qlip\Stl\ThreeMfWriter;
 
 /**
  * Test d'ensemble de l'application, sans HTTP : schema SQLite, inscription,
  * verification d'email, connexion, quotas, pages, badges, exports, CSRF,
- * credentials WebAuthn. Le routeur est le meme que celui du front controller.
+ * credentials WebAuthn, echappement et controle des champs. Le routeur est le meme
+ * que celui du front controller.
  *
  * Usage : php tests/app_test.php
  */
@@ -391,7 +395,89 @@ if (!is_array($fixtures)) {
     check('journal d audit', $counts === ['register' => 1, 'assert' => 1, 'failed' => 3], json_encode($counts));
 }
 
-// 14. Variables d'environnement : Apache ne les transmet pas de la meme facon selon le
+// 14. Echappement et controle des champs : l app est exposee au public.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+// Le maxlength des formulaires n'est pas une protection : on poste directement.
+$response = $send('POST', '/pages', ['title' => str_repeat('a', 81), 'slug' => 'outretroplong']);
+
+check('titre trop long refuse', $response->status() === 422, $response->body());
+
+$response = $send('POST', '/pages', ['title' => 'Note', 'note' => str_repeat('b', 501)]);
+
+check('note trop longue refusee', $response->status() === 422, $response->body());
+
+$response = $send('POST', '/pages', ['title' => 'Email', 'email_contact' => 'pas un email']);
+
+check('email de contact refuse', $response->status() === 422, $response->body());
+
+$response = $send('POST', '/pages', ['title' => 'Email valide', 'email_contact' => 'contact@qlip.test', 'slug' => 'emailvalide']);
+
+check('email de contact accepte', $response->status() === 302, $response->body());
+
+$slugPage = $app->badges->createPage((int) $admin['id'], ['title' => 'Long slug', 'slug' => str_repeat('s', 60)]);
+
+check('slug tronque a 32', strlen((string) $slugPage['slug']) === 32, (string) $slugPage['slug']);
+
+// Le XSS se traite a l'affichage : les valeurs sont stockees telles quelles, et echappees
+// par e() dans les templates. On verifie le rendu, pas seulement l'enregistrement.
+$xssPage = $app->badges->createPage((int) $admin['id'], [
+    'title' => '<script>alert(1)</script>',
+    'slug' => 'xsstest',
+    'note' => '<img src=x onerror=alert(1)>',
+]);
+
+$html = $send('GET', '/p/xsstest')->body();
+
+check('titre echappe au rendu', str_contains($html, '&lt;script&gt;alert(1)&lt;/script&gt;') && !str_contains($html, '<script>alert(1)'));
+check('note echappee au rendu', str_contains($html, '&lt;img src=x onerror=alert(1)&gt;') && !str_contains($html, '<img src=x onerror='));
+
+check('echappement des guillemets', attr('a"b') === 'a&quot;b' && e("l'et") === 'l&#039;et');
+
+// Les URL de template partent dans des attributs : attr() est utilise autour de url().
+check('url echappee dans un attribut', attr(url('p/xsstest')) === 'http://qlip.test/p/xsstest');
+
+// En-tetes de securite sur toutes les reponses, y compris le JSON (verifie aussi par
+// tests/http_test.py sur une vraie reponse HTTP).
+$json = Response::json(['ok' => true])->withSecurityHeaders();
+
+check('nosniff sur une reponse JSON', ($json->headers()['X-Content-Type-Options'] ?? '') === 'nosniff');
+check('frame-ancestors sur une reponse JSON', str_contains($json->headers()['Content-Security-Policy'] ?? '', 'frame-ancestors'));
+
+$disposition = Response::file('x', "mauvais\nnom\".stl", 'model/stl')->header('Content-Disposition');
+
+check('nom de fichier nettoye', $disposition === 'attachment; filename="mauvaisnom.stl"', (string) $disposition);
+
+$location = (string) Response::redirect("/login\r\nEn-tete-injectee: 1")->header('Location');
+
+check('Location sans retour a la ligne', !str_contains($location, "\n") && !str_contains($location, "\r"), $location);
+
+// Parametres de design : tout est borne, les couleurs doivent rester un hexadecimal.
+$design = Design::fromArray([
+    'cornerRadius' => 99,
+    'band' => 0.5,
+    'margin' => 50,
+    'colorBase' => '"><script>',
+    'colorInk' => '#00ff00',
+]);
+
+check('cornerRadius borne', $design->cornerRadius <= 8.0, (string) $design->cornerRadius);
+check('band borne', $design->band >= $design->holeRadius + 1.0 && $design->band <= 15.0, (string) $design->band);
+check('margin borne', $design->margin <= 10.0, (string) $design->margin);
+check('couleur invalide rejetee', $design->colorBase === '1A1A1A', $design->colorBase);
+check('couleur valide acceptee', $design->colorInk === '00FF00', $design->colorInk);
+
+// Nom de volume : un jeton dans un STL ASCII, un retour a la ligne casserait le fichier.
+$stl = StlWriter::write([['name' => "base\nnom casse", 'mesh' => $export['volumes'][0]['mesh']]]);
+
+check('nom STL normalise', str_starts_with($stl, 'solid basenomcasse') && str_contains($stl, "endsolid basenomcasse"), substr($stl, 0, 24));
+
+// Le .3MF est un ZIP sans compression : le XML est lisible tel quel.
+$model = ThreeMfWriter::write([['name' => '"><script>', 'color' => '"><script>', 'mesh' => $export['volumes'][0]['mesh']]], ['title' => '<script>']);
+
+check('3MF : nom et couleur echappes', !str_contains($model, '"><script>') && str_contains($model, '&quot;&gt;&lt;script&gt;'), substr($model, 0, 40));
+
+// 15. Variables d'environnement : Apache ne les transmet pas de la meme facon selon le
 // module. PutEnv arrive dans getenv(), SetEnv dans $_SERVER, et une requete reecrite par
 // mod_rewrite porte les valeurs en REDIRECT_*. PHP-FPM ne voit pas PutEnv.
 check('env par defaut', env('QLIP_TEST_ABSENT', 'defaut') === 'defaut');
@@ -403,6 +489,17 @@ $_SERVER['REDIRECT_QLIP_TEST_REDIR'] = 'de-redirect';
 check('env par getenv', env('QLIP_TEST_GETENV') === 'de-getenv');
 check('env par $_SERVER', env('QLIP_TEST_SERVER') === 'de-server');
 check('env par REDIRECT_', env('QLIP_TEST_REDIR') === 'de-redirect');
+
+// 16. Deconnexion : c'est un POST, donc il exige le jeton CSRF. Sans lui, une page
+// externe peut faire perdre la session a un compte connecte.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+check('deconnexion refusee sans jeton', $send('POST', '/logout', ['csrf' => 'mauvais-jeton'])->status() === 400);
+
+$response = $send('POST', '/logout', ['csrf' => $app->session->token()]);
+
+check('deconnexion acceptee', $response->status() === 302, $response->body());
+check('session videes', $app->session->get('user_id') === null);
 
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
 exit($failures === 0 ? 0 : 1);

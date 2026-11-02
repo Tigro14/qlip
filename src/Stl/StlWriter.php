@@ -17,7 +17,14 @@ final class StlWriter
         $out = '';
 
         foreach ($volumes as $volume) {
-            $name = $volume['name'];
+            // Le nom est un seul jeton dans un STL ASCII : un retour a la ligne dans le
+            // nom casserait le fichier. On le normalise, meme si Badge::build fournit
+            // des noms simples.
+            $name = preg_replace('/[^A-Za-z0-9_-]/', '', (string) $volume['name']);
+
+            if ($name === '') {
+                $name = 'volume';
+            }
 
             $out .= "solid {$name}\n";
 

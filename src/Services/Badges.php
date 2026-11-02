@@ -29,9 +29,30 @@ final class Badges
         $this->baseUrl = $baseUrl;
     }
 
+    /**
+     * Longueurs maximales des champs d une page, en octets UTF-8. Le maxlength des
+     * formulaires n est pas une protection : on peut poster directement, donc le
+     * controle se fait cote serveur avant l insertion. L echappement HTML se fait a
+     * l affichage (e() dans les templates), pas ici.
+     */
+    private const MAX_FIELD_LENGTH = [
+        'title' => 80,
+        'phone' => 40,
+        'email_contact' => 120,
+        'note' => 500,
+    ];
+
+    private const MAX_SLUG_LENGTH = 32;
+
     /** @param array<string, mixed> $input */
     public function createPage(int $userId, array $input): array
     {
+        $fields = $this->cleanFields($input);
+
+        if ($fields['title'] === '') {
+            $fields['title'] = 'Objet trouve';
+        }
+
         $slug = $this->uniqueSlug((string) ($input['slug'] ?? ''));
 
         $this->db->exec(
@@ -40,10 +61,10 @@ final class Badges
             [
                 ':slug' => $slug,
                 ':user_id' => $userId,
-                ':title' => trim((string) ($input['title'] ?? 'Objet trouve')),
-                ':phone' => trim((string) ($input['phone'] ?? '')),
-                ':email_contact' => trim((string) ($input['email_contact'] ?? '')),
-                ':note' => trim((string) ($input['note'] ?? '')),
+                ':title' => $fields['title'],
+                ':phone' => $fields['phone'],
+                ':email_contact' => $fields['email_contact'],
+                ':note' => $fields['note'],
                 ':created_at' => now(),
             ]
         );
@@ -54,13 +75,15 @@ final class Badges
     /** @param array<string, mixed> $input */
     public function updatePage(int $pageId, array $input): array
     {
+        $fields = $this->cleanFields($input);
+
         $this->db->exec(
             'UPDATE pages SET title = :title, phone = :phone, email_contact = :email_contact, note = :note WHERE id = :id',
             [
-                ':title' => trim((string) ($input['title'] ?? '')),
-                ':phone' => trim((string) ($input['phone'] ?? '')),
-                ':email_contact' => trim((string) ($input['email_contact'] ?? '')),
-                ':note' => trim((string) ($input['note'] ?? '')),
+                ':title' => $fields['title'],
+                ':phone' => $fields['phone'],
+                ':email_contact' => $fields['email_contact'],
+                ':note' => $fields['note'],
                 ':id' => $pageId,
             ]
         );
@@ -195,9 +218,38 @@ final class Badges
         return Renderer::png(QrCode::encode($this->qrText($page), 'M'), $modulePx);
     }
 
+    /**
+     * Champs d une page, controles cote serveur : taille maximale et forme de l email
+     * de contact (il part dans un href="mailto:", donc il doit rester une adresse
+     * simple). Rien n est echappe ici : l echappement appartient au rendu.
+     *
+     * @param array<string, mixed> $input
+     * @return array<string, string>
+     */
+    private function cleanFields(array $input): array
+    {
+        $fields = [];
+
+        foreach (self::MAX_FIELD_LENGTH as $key => $max) {
+            $value = trim((string) ($input[$key] ?? ''));
+
+            if (strlen($value) > $max) {
+                throw new \RuntimeException('Champ trop long : ' . $key . ' (' . $max . ' caracteres max.)');
+            }
+
+            $fields[$key] = $value;
+        }
+
+        if ($fields['email_contact'] !== '' && filter_var($fields['email_contact'], FILTER_VALIDATE_EMAIL) === false) {
+            throw new \RuntimeException('Email de contact invalide.');
+        }
+
+        return $fields;
+    }
+
     private function uniqueSlug(string $wanted): string
     {
-        $wanted = preg_replace('/[^a-z0-9]+/', '', strtolower($wanted)) ?: '';
+        $wanted = substr(preg_replace('/[^a-z0-9]+/', '', strtolower($wanted)) ?: '', 0, self::MAX_SLUG_LENGTH);
 
         for ($attempt = 0; $attempt < 12; $attempt++) {
             $slug = $wanted !== '' && $attempt === 0 ? $wanted : substr(bin2hex(random_bytes(4)), 0, 6);

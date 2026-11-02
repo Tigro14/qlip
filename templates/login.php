@@ -9,7 +9,7 @@
         <p class="flash flash-err">Trop de tentatives : attends <?= (int) ($locked - time()) ?> secondes.</p>
     <?php endif; ?>
 
-    <form method="post" action="<?= url('login') ?>">
+    <form method="post" action="<?= attr(url('login')) ?>">
         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
         <label>
@@ -28,11 +28,11 @@
     <p class="note">
         Le compte doit avoir verifie son email.
         <?php if ($user === null): ?>
-            <a href="<?= url('register') ?>">Inscription</a>
+            <a href="<?= attr(url('register')) ?>">Inscription</a>
         <?php endif; ?>
     </p>
 
     <p>
-        <a class="button" href="<?= url('admin/yubikey') ?>">Connexion YubiKey (administration)</a>
+        <a class="button" href="<?= attr(url('admin/yubikey')) ?>">Connexion YubiKey (administration)</a>
     </p>
 </section>

@@ -12,7 +12,7 @@
     <div data-webauthn
          data-csrf="<?= e($csrf ?? '') ?>"
          data-rp="<?= e($rpId ?? '') ?>"
-         data-base="<?= url('') ?>"
+         data-base="<?= attr(url('')) ?>"
          data-user="<?= e(json_field(['id' => (string) $user['id'], 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
 
         <button type="button" data-action="register">Enregistrer une YubiKey</button>
@@ -74,7 +74,7 @@
             <?php foreach ($pages as $page): ?>
                 <tr>
                     <td><?= (int) $page['id'] ?></td>
-                    <td><a href="<?= url('p/' . $page['slug']) ?>"><code><?= e($page['slug']) ?></code></a></td>
+                    <td><a href="<?= attr(url('p/' . $page['slug'])) ?>"><code><?= e($page['slug']) ?></code></a></td>
                     <td><?= e($page['title']) ?></td>
                     <td><?= e($page['user_email'] ?? '') ?></td>
                     <td><?= e($page['created_at']) ?></td>
@@ -104,8 +104,8 @@
                     <td><?= (int) $badge['bicolor'] === 1 ? 'oui' : 'non' ?></td>
                     <td><?= e($badge['created_at']) ?></td>
                     <td>
-                        <a href="<?= url('badges/' . $badge['id'] . '/stl') ?>">STL</a>
-                        <a href="<?= url('badges/' . $badge['id'] . '/3mf') ?>">3MF</a>
+                        <a href="<?= attr(url('badges/' . $badge['id'] . '/stl')) ?>">STL</a>
+                        <a href="<?= attr(url('badges/' . $badge['id'] . '/3mf')) ?>">3MF</a>
                     </td>
                 </tr>
             <?php endforeach; ?>

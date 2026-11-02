@@ -7,6 +7,6 @@
     </p>
 
     <p>
-        <a class="button" href="<?= url('dashboard') ?>">Mes pages</a>
+        <a class="button" href="<?= attr(url('dashboard')) ?>">Mes pages</a>
     </p>
 </section>

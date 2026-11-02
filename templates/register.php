@@ -5,7 +5,7 @@
         <p class="flash flash-err"><?= e($error) ?></p>
     <?php endif; ?>
 
-    <form method="post" action="<?= url('register') ?>">
+    <form method="post" action="<?= attr(url('register')) ?>">
         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
         <label>

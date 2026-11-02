@@ -10,7 +10,7 @@
     </p>
 
     <?php if ($user === null): ?>
-        <form method="post" action="<?= url('login') ?>">
+        <form method="post" action="<?= attr(url('login')) ?>">
             <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
             <label>Email<input type="email" name="email" required autocomplete="email"></label>
             <label>Mot de passe<input type="password" name="password" required autocomplete="current-password"></label>
@@ -23,7 +23,7 @@
     <div data-webauthn
          data-csrf="<?= e($csrf ?? '') ?>"
          data-rp="<?= e($rpId ?? '') ?>"
-         data-base="<?= url('') ?>"
+         data-base="<?= attr(url('')) ?>"
          data-user="<?= e(json_field($user === null ? null : ['id' => (string) $user['id'], 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
         <?php if ($user !== null && (int) ($user['is_admin'] ?? 0) === 1): ?>
             <button type="button" data-action="register">Enregistrer la YubiKey</button>

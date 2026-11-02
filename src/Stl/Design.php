@@ -45,7 +45,13 @@ final class Design
 
         foreach (['colorBase', 'colorInk'] as $key) {
             if (isset($values[$key])) {
-                $design->$key = strtoupper(ltrim((string) $values[$key], '#'));
+                // Ces couleurs partent dans un attribut XML du .3MF : elles ne peuvent
+                // etre qu un hexadecimal a 6 chiffres, rien d autre.
+                $color = strtoupper(ltrim((string) $values[$key], '#'));
+
+                if (preg_match('/^[0-9A-F]{6}$/', $color) === 1) {
+                    $design->$key = $color;
+                }
             }
         }
 
@@ -54,6 +60,12 @@ final class Design
         $design->holeRadius = max(1.0, min(5.0, $design->holeRadius));
         $design->width = max(20.0, min(60.0, $design->width));
         $design->height = max(20.0, min(70.0, $design->height));
+        $design->cornerRadius = max(0.0, min(8.0, $design->cornerRadius));
+        $design->margin = max(1.0, min(10.0, $design->margin));
+
+        // Le trou doit rester dans la plaque : la bande se mesure depuis le bord haut,
+        // et un bandeau trop court ferait deborder le cercle du trou.
+        $design->band = max($design->holeRadius + 1.0, min(15.0, $design->band));
 
         return $design;
     }

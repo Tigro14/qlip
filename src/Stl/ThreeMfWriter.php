@@ -87,7 +87,7 @@ final class ThreeMfWriter
             // defaut (core). Les attributs pid et pindex restent dans core.
             $out .= '<m:colors id="1" name="Qlip">';
             foreach ($colors as $index => $color) {
-                $out .= '<m:color id="' . $index . '" value="#' . $color . '"/>';
+                $out .= '<m:color id="' . $index . '" value="#' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . '"/>';
             }
             $out .= '</m:colors>';
         }

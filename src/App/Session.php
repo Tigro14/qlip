@@ -124,8 +124,21 @@ final class Session
     {
         $this->data = [];
 
-        if ($this->started && function_exists('session_destroy')) {
+        // session_status() peut mentir avec un binaire statique : on se fie a session_id().
+        if ($this->started && session_id() !== '') {
             session_destroy();
+
+            // Le cookie porte le nom de la session : sans expiration, le navigateur garde
+            // un identifiant mort. On le vide en meme temps.
+            if (!headers_sent()) {
+                setcookie(session_name() ?: 'qlip_session', '', [
+                    'expires' => time() - 3600,
+                    'path' => '/',
+                    'httponly' => true,
+                    'samesite' => 'Strict',
+                    'secure' => \env('QLIP_SECURE_COOKIES', '0') === '1',
+                ]);
+            }
         }
     }
 

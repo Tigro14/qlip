@@ -66,7 +66,16 @@ fichier, dans le namespace `Qlip\...`.
 - controles WebAuthn : challenge, origine, hash du RP ID, drapeaux UP/AT, compteur
   strictement croissant, signature EC2/P-256 ou RSA. Un controle ne doit pas etre relache
   pour faire passer un test ;
-- en-tetes de securite poses dans `Response::send()` (CSP, `nosniff`, `frame-ancestors`).
+- en-tetes de securite poses dans `Response::send()`, sur toutes les reponses (CSP,
+  `nosniff`, `frame-ancestors`) ;
+- SQL uniquement en prepare, avec params nommes, sans texte d'une requete dans la requete
+  (`PDO::ATTR_EMULATE_PREPARES => false`) ;
+- valeurs issues d'une requete : echappees au rendu par `e()` (`attr()` dans les attributs
+  HTML), jamais reconstruites dans du HTML ; les controles de forme et de taille se font cote
+  serveur (`Badges::cleanFields()`, `Design::fromArray()`) : le `maxlength` d'un formulaire
+  n'est pas une protection ;
+- un en-tete (`Location`, `Content-Disposition`) ne recoit ni retour a la ligne, ni
+  guillemet, ni octet de controle.
 
 ## Lancer
 

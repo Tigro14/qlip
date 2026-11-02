@@ -14,7 +14,7 @@
     </ul>
 
     <p>
-        <a class="button" href="<?= url('register') ?>">Creer un compte</a>
-        <a class="button" href="<?= url('login') ?>">Connexion</a>
+        <a class="button" href="<?= attr(url('register')) ?>">Creer un compte</a>
+        <a class="button" href="<?= attr(url('login')) ?>">Connexion</a>
     </p>
 </section>

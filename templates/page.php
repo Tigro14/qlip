@@ -21,7 +21,7 @@
     <?php endif; ?>
 
     <p class="note">
-        Imprimer ce QR en porte-cles : <a href="<?= url('dashboard') ?>">creer un badge</a>
+        Imprimer ce QR en porte-cles : <a href="<?= attr(url('dashboard')) ?>">creer un badge</a>
         (STL monochrome grave ou en relief, ou 3MF bicolore).
     </p>
 </section>

@@ -8,7 +8,7 @@
 
     <h2>Creer une page de contact</h2>
 
-    <form method="post" action="<?= url('pages') ?>">
+    <form method="post" action="<?= attr(url('pages')) ?>">
         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
         <label>Titre<input type="text" name="title" required maxlength="80"></label>
@@ -28,12 +28,12 @@
 
     <?php foreach ($pages as $page): ?>
         <article class="card">
-            <h3><a href="<?= url('p/' . $page['slug']) ?>"><?= e($page['title']) ?></a></h3>
+            <h3><a href="<?= attr(url('p/' . $page['slug'])) ?>"><?= e($page['title']) ?></a></h3>
             <p class="note">/<code><?= e($page['slug']) ?></code> &mdash;
-                <img class="qr" src="<?= url('qr/' . $page['slug'] . '.png') ?>" alt="QR" width="120" height="120">
+                <img class="qr" src="<?= attr(url('qr/' . $page['slug'] . '.png')) ?>" alt="QR" width="120" height="120">
             </p>
 
-            <form method="post" action="<?= url('p/' . $page['slug']) ?>">
+            <form method="post" action="<?= attr(url('p/' . $page['slug'])) ?>">
                 <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
                 <label>Titre<input type="text" name="title" value="<?= e($page['title']) ?>" required></label>
                 <label>Telephone<input type="text" name="phone" value="<?= e($page['phone'] ?? '') ?>"></label>
@@ -46,7 +46,7 @@
 
     <h2>Creer un badge</h2>
 
-    <form method="post" action="<?= url('badges') ?>">
+    <form method="post" action="<?= attr(url('badges')) ?>">
         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
         <label>
@@ -94,8 +94,8 @@
                     <td><?= $badge['bicolor'] ? 'oui' : 'non' ?></td>
                     <td><?= e($badge['created_at']) ?></td>
                     <td>
-                        <a href="<?= url('badges/' . $badge['id'] . '/stl') ?>">STL</a>
-                        <a href="<?= url('badges/' . $badge['id'] . '/3mf') ?>">3MF</a>
+                        <a href="<?= attr(url('badges/' . $badge['id'] . '/stl')) ?>">STL</a>
+                        <a href="<?= attr(url('badges/' . $badge['id'] . '/3mf')) ?>">3MF</a>
                     </td>
                 </tr>
             <?php endforeach; ?>
