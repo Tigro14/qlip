@@ -46,8 +46,11 @@ Configuration par variables d'environnement :
 
 ## Deploiement (Apache ou nginx + PHP-FPM)
 
+Les exemples utilisent `qlip.example.com` (nom reserve a la documentation) et
+`/var/www/qlip` : a remplacer par votre nom de domaine et votre chemin reel.
+
 Le document root doit etre `public/` : `src/`, `templates/`, `data/` et `var/` restent hors
-du document root, et `data/` et `var/` doivent etre accessibles en écriture par le processeur
+du document root, et `data/` et `var/` doivent etre accessibles en ecriture par le processeur
 PHP. Le front controller est `public/index.php` : la reecriture doit envoyer tout ce qui
 n'est pas un fichier ou un dossier reel vers ce fichier, sinon `/login`, `/register` et
 `/p/{slug}` renvoient le 404 du serveur. Les assets (`public/assets/`) sont servis par le
@@ -106,7 +109,7 @@ navigateur qui parle au token, PHP ne fait que verifier la reponse. La ceremony
    `var/outbox/*.eml`).
 
    ```bash
-   QLIP_ADMIN_EMAILS=ton@email.example QLIP_BASE_URL=https://qlip.example \
+   QLIP_ADMIN_EMAILS=admin@qlip.example.com QLIP_BASE_URL=https://qlip.example.com \
        QLIP_SECURE_COOKIES=1 php -S 127.0.0.1:8080 public/router.php
    ```
 

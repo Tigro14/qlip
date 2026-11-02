@@ -17,7 +17,7 @@ RewriteEngine On
 # REDIRECT_ quand la requete est reecrite. L'app lit les deux. Sans QLIP_BASE_URL, l'app
 # part de http://localhost:8080 : le contenu des QR pointe sur localhost et WebAuthn
 # refuse l'origine. A adapter au nom de domaine.
-SetEnv QLIP_BASE_URL https://qlip.tigro.fr
+SetEnv QLIP_BASE_URL https://qlip.example.com
 SetEnv QLIP_SECURE_COOKIES 1
 
 RewriteCond %{REQUEST_FILENAME} !-f
