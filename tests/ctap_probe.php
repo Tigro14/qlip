@@ -21,8 +21,14 @@ use Qlip\Webauthn\Cbor;
  * script n'est pas lance par tests/run.sh, il demande du materiel.
  *
  *   sudo php tests/ctap_probe.php
- *   sudo php tests/ctap_probe.php /dev/hidraw2
- *   sudo podman run --rm -v "$PWD:/app:ro" --device /dev/hidraw0 localhost/qlip-test php tests/ctap_probe.php
+ *   sudo php tests/ctap_probe.php /dev/hidraw5
+ *   sudo podman run --rm -v "$PWD:/app:ro" -w /app --device /dev/hidraw5 docker.io/library/php:8.5-cli php tests/ctap_probe.php /dev/hidraw5
+ *
+ * Tramage HID : l identifiant de rapport n est pas une convention (0x20/0x21), il vient du
+ * descripteur. Quand le device n utilise pas de reports numerotes, hidraw ne met rien au debut
+ * des octets lus, et il faut un zero au debut de ce qu on ecrit. Le descripteur est donc lu, et
+ * la trame recue est imprimee en octets bruts : sans elle, une reponse sans echo du nonce ne
+ * permet pas de distinguer une cle CTAP1 d une erreur de tramage.
  */
 
 const REPORT_SIZE = 64;
@@ -32,11 +38,12 @@ const TYPE_INIT = 0x80;
 
 const CMD_INIT = 0x06;
 const CMD_CBOR = 0x10;
-const CMD_KEEPALIVE = 0x3B;
 const CMD_ERROR = 0x3F;
 
 /** Premier byte du payload d un CTAPHID_CBOR : authenticatorGetInfo. */
 const CTAP_GET_INFO = 0x02;
+
+const BROADCAST = "\xff\xff\xff\xff";
 
 /** Methodes de verification utilisateur (key 9 du GetInfo). */
 const UV_METHODS = [
@@ -48,8 +55,6 @@ const UV_METHODS = [
     6 => 'connaissance interne (PIN)',
     7 => 'connaissance externe (PIN)',
 ];
-
-const BROADCAST = "\xff\xff\xff\xff";
 
 $failures = 0;
 
@@ -64,30 +69,87 @@ function check(string $label, bool $ok, string $detail = ''): void
     echo $ok ? '  OK   ' : '  KO   ', $label, $detail !== '' ? ' : ' . $detail : '', PHP_EOL;
 }
 
-/**
- * Interface HID qui porte la page d'usage FIDO (0xF1D0). Les autres interfaces du meme
- * device sont le clavier (OTP) ou le lecteur de cartes (PIV, OpenPGP) : une cle vue seulement
- * comme carte n est pas un authenticateur WebAuthn. La page d'usage se lit dans le descripteur
- * de rapport, pas dans MODALIAS : MODALIAS porte le type de bus, pas la page d usage.
- * L item Usage Page 2 octets est 0x06 suivi de la valeur en petit boutien (d0 f1).
- */
-function find_fido_device(): ?string
+function hex(string $value): string
 {
-    foreach (glob('/sys/class/hidraw/hidraw*') ?: [] as $path) {
-        $descriptor = file_get_contents($path . '/device/report_descriptor');
+    return trim(chunk_split(bin2hex($value), 2, ' '));
+}
 
-        if ($descriptor !== false && str_contains(bin2hex($descriptor), 'd0f1')) {
-            return basename($path);
+function byte(int $value): string
+{
+    return '0x' . str_pad(dechex($value), 2, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Item Report ID du descripteur de rapport, ou null quand le device n utilise pas de reports
+ * numerotes. Les items sont parcourus, pas cherches dans l hexadecimal : un octet 85 peut etre
+ * la donnee d un autre item. Item court : balise dans le nibble haut, type dans les bits 2-3,
+ * taille dans les bits 0-1 (la valeur 3 vaut 4 octets). L item Report ID est global, balise 8 ;
+ * la meme balise en type Main est l item Input, donc le type compte (85 est un Report ID, 81 est
+ * un Input). Item long : prefixe FE, puis la taille reelle et la balise reelle ; il ne porte pas
+ * de Report ID.
+ */
+function report_id(string $descriptor): ?int
+{
+    $offset = 0;
+
+    while ($offset < strlen($descriptor)) {
+        $header = ord($descriptor[$offset++]);
+        $tag = $header >> 4;
+        $type = ($header >> 2) & 3;
+        $size = $header & 3;
+
+        if ($size === 3) {
+            $size = 4;
         }
+
+        if ($tag === 15 && $type === 3) {
+            if ($offset >= strlen($descriptor)) {
+                break;
+            }
+
+            $offset += ord($descriptor[$offset]);
+
+            continue;
+        }
+
+        if ($size === 0 || $offset + $size > strlen($descriptor)) {
+            break;
+        }
+
+        if ($type === 1 && $tag === 8) {
+            return (int) hexdec(bin2hex(substr($descriptor, $offset, $size)));
+        }
+
+        $offset += $size;
     }
 
     return null;
 }
 
-function send($handle, string $cid, int $cmd, string $payload): void
+/**
+ * Interface HID qui porte la page d'usage FIDO (0xF1D0). Les autres interfaces du meme device
+ * sont le clavier (OTP) ou le lecteur de cartes (PIV, OpenPGP) : une cle vue seulement comme
+ * carte n est pas un authenticateur WebAuthn. La page d'usage se lit dans le descripteur de
+ * rapport, pas dans MODALIAS : MODALIAS porte le type de bus, pas la page d usage. L item Usage
+ * Page 2 octets est 0x06 suivi de la valeur en petit boutien (d0 f1).
+ */
+function fido_interface(string $path): ?string
+{
+    $descriptor = file_get_contents($path . '/device/report_descriptor');
+
+    if ($descriptor !== false && str_contains(bin2hex($descriptor), 'd0f1')) {
+        return basename($path);
+    }
+
+    return null;
+}
+
+function send($handle, string $cid, int $cmd, string $payload, int $report): void
 {
     $size = strlen($payload);
-    $frame = chr(0) . $cid . chr($cmd | TYPE_INIT)
+
+    // Le premier octet est l identifiant de rapport : 0 quand le device n en a pas.
+    $frame = chr($report) . $cid . chr($cmd | TYPE_INIT)
         . chr(($size >> 16) & 255) . chr(($size >> 8) & 255) . chr($size & 255)
         . $payload;
 
@@ -101,50 +163,83 @@ function receive($handle, int $seconds): ?string
     $except = null;
 
     if (stream_select($read, $write, $except, $seconds) < 1) {
+        echo '  trame recue : rien en ', $seconds, " s", PHP_EOL;
+
         return null;
     }
 
     $frame = fread($handle, REPORT_SIZE);
 
-    return $frame === false || $frame === '' ? null : $frame;
-}
+    if ($frame === false || $frame === '') {
+        echo '  trame recue : rien', PHP_EOL;
 
-/**
- * Lit une reponse complete (trame d initialisation puis continuations). Le canal de la cle
- * est celui qu elle a attribue, donc il peut differer du canal demande.
- *
- * @return array{cmd: int, payload: string}|null
- */
-function response($handle, int $seconds): ?array
-{
-    $frame = receive($handle, $seconds);
-
-    if ($frame === null || strlen($frame) < 9) {
         return null;
     }
 
-    $cmd = ord($frame[5]);
-    $size = (ord($frame[6]) << 16) + (ord($frame[7]) << 8) + ord($frame[8]);
-    $payload = substr($frame, 9);
+    echo '  trame recue : ', hex($frame), PHP_EOL;
 
-    while (strlen($payload) < $size) {
+    return $frame;
+}
+
+/**
+ * Trame d initialisation : identifiant de rapport (quand il existe), canal, balise, taille,
+ * payload.
+ *
+ * @return array{cid: string, cmd: int, size: int, payload: string}|null
+ */
+function parse(string $frame, int $skip): ?array
+{
+    if (strlen($frame) < $skip + 8) {
+        return null;
+    }
+
+    $size = (ord($frame[$skip + 5]) << 16) + (ord($frame[$skip + 6]) << 8) + ord($frame[$skip + 7]);
+
+    return [
+        'cid' => substr($frame, $skip, 4),
+        'cmd' => ord($frame[$skip + 4]),
+        'size' => $size,
+        'payload' => substr($frame, $skip + 8, $size),
+    ];
+}
+
+/** Lit une reponse complete : la taille annoncee peut depasser une trame. */
+function read_answer($handle, int $seconds, int $skip): ?array
+{
+    $frame = receive($handle, $seconds);
+    $answer = parse((string) $frame, $skip);
+
+    if ($answer === null) {
+        return null;
+    }
+
+    // Une continuation a la meme forme, avec le numero de sequence a la place de la taille.
+    // Le numero n est pas verifie : les continuations arrivent dans l ordre.
+    while (strlen($answer['payload']) < $answer['size']) {
         $next = receive($handle, $seconds);
 
-        if ($next === null || strlen($next) < 6) {
+        if ($next === null || strlen($next) < $skip + 5) {
             break;
         }
 
-        // Le byte de sequence n est pas verifie : la cle envoie les continuations dans l ordre.
-        $payload .= substr($next, 5);
+        $answer['payload'] .= substr($next, $skip + 5);
     }
 
-    return ['cmd' => $cmd, 'payload' => substr($payload, 0, $size)];
+    return $answer;
 }
 
 $device = $argv[1] ?? null;
 
 if ($device === null) {
-    $found = find_fido_device();
+    $found = null;
+
+    foreach (glob('/sys/class/hidraw/hidraw*') ?: [] as $path) {
+        $found = fido_interface($path);
+
+        if ($found !== null) {
+            break;
+        }
+    }
 
     if ($found === null) {
         check('cle vue comme authenticateur FIDO (page d usage F1D0)', false, 'rien sur /sys/class/hidraw');
@@ -155,6 +250,18 @@ if ($device === null) {
     $device = '/dev/' . $found;
 }
 
+$name = basename($device);
+$descriptor = (string) file_get_contents('/sys/class/hidraw/' . $name . '/device/report_descriptor');
+$report = $descriptor === '' ? null : report_id($descriptor);
+
+// Information, pas un check : une cle sans item Report ID est normale, et la valeur n est pas
+// fixee par la spec. Ce qui compte est ce que la cle fait avec, ce que l echo du nonce montre.
+echo '  reports numerotes : ', match (true) {
+    $descriptor === '' => 'descripteur illisible (le conteneur ne monte pas /sys), les deux formes sont testees',
+    $report === null => 'non (zero au debut de ce qu on ecrit, rien au debut de ce qu on lit)',
+    default => 'item Report ID ' . byte((int) $report),
+}, PHP_EOL;
+
 $handle = fopen($device, 'rb+');
 
 if ($handle === false) {
@@ -164,37 +271,58 @@ if ($handle === false) {
 
 check('device accessible', true, $device);
 
-// CTAPHID_INIT : la cle attribue le canal sur le canal de diffusion.
+$skip = $report === null ? 0 : 1;
+
+// CTAPHID_INIT sur le canal de diffusion : la cle attribue le canal.
 $nonce = random_bytes(8);
-send($handle, BROADCAST, CMD_INIT, $nonce);
-$answer = response($handle, 10);
+send($handle, BROADCAST, CMD_INIT, $nonce, $report ?? 0);
+$frame = receive($handle, 10);
 
-if ($answer === null) {
-    check('CTAPHID_INIT', false, 'aucune reponse en 10 s');
+if ($frame === null) {
     exit(1);
 }
 
-$payload = $answer['payload'];
+// Le descripteur dit quelle forme attendre, et l echo du nonce la confirme. Les deux sont
+// testees sur la trame recue : si aucune ne fait l echo, ce n est pas une question de tramage.
+$answer = null;
 
-if ($answer['cmd'] !== CMD_INIT || strlen($payload) < 16 || substr($payload, 0, 8) !== $nonce) {
-    check('CTAPHID_INIT', false, 'reponse sans le nonce : cle CTAP1 seule');
+foreach ([$skip, $skip === 0 ? 1 : 0] as $form) {
+    $try = parse($frame, $form);
+
+    if ($try !== null && $try['cmd'] === CMD_INIT && strlen($try['payload']) >= 16 && substr($try['payload'], 0, 8) === $nonce) {
+        $answer = $try;
+        $skip = $form;
+
+        break;
+    }
+}
+
+if ($answer === null) {
+    foreach ([0, 1] as $form) {
+        $try = parse($frame, $form);
+
+        if ($try !== null) {
+            echo '  relu avec le decalage ', $form, ' : balise ', byte($try['cmd']), ', payload ', hex($try['payload']), PHP_EOL;
+        }
+    }
+
+    check('CTAPHID_INIT', false, 'pas d echo du nonce : cle CTAP1 seule, ou reponse sur l autre interface du device');
     exit(1);
 }
 
-$cid = substr($payload, 8, 4);
-$capabilities = ord($payload[strlen($payload) - 1]);
+echo '  forme de trame retenue : ', $skip === 0 ? 'sans identifiant de rapport' : 'avec identifiant de rapport', PHP_EOL;
 
-echo '  canal : ' . bin2hex($cid), PHP_EOL;
-echo '  version interface : ' . ord($payload[12]) . '.' . ord($payload[13]), PHP_EOL;
-echo '  capabilities : 0x' . str_pad(dechex($capabilities), 2, '0', STR_PAD_LEFT)
-    , ' (' . (($capabilities & 0x02) === 0x02 ? 'CTAP1' : 'CTAP1 non annonce') . ')'
-    , PHP_EOL;
+$cid = substr($answer['payload'], 8, 4);
+$capabilities = ord($answer['payload'][strlen($answer['payload']) - 1]);
 
-send($handle, $cid, CMD_CBOR, chr(CTAP_GET_INFO));
-$answer = response($handle, 15);
+echo '  canal : ', hex($cid), PHP_EOL;
+echo '  version interface : ', ord($answer['payload'][12]), '.', ord($answer['payload'][13]), PHP_EOL;
+echo '  capabilities : ', byte($capabilities) . ' (' . (($capabilities & 0x02) === 0x02 ? 'CTAP1' : 'CTAP1 non annonce') . ')', PHP_EOL;
+
+send($handle, $cid, CMD_CBOR, chr(CTAP_GET_INFO), $report ?? 0);
+$answer = read_answer($handle, 15, $skip);
 
 if ($answer === null) {
-    check('authenticatorGetInfo', false, 'aucune reponse en 15 s');
     exit(1);
 }
 
@@ -203,13 +331,15 @@ if ($answer['payload'] === '') {
     exit(1);
 }
 
-if ($answer['cmd'] === CMD_ERROR) {
-    check('authenticatorGetInfo', false, 'statut CTAP 0x' . str_pad(dechex(ord($answer['payload'][0])), 2, '0', STR_PAD_LEFT));
+if ($answer['cmd'] !== CMD_CBOR) {
+    check('authenticatorGetInfo', false, 'trame recue avec la balise ' . byte($answer['cmd']));
     exit(1);
 }
 
-if (ord($answer['payload'][0]) !== 0) {
-    check('authenticatorGetInfo', false, 'statut CTAP 0x' . str_pad(dechex(ord($answer['payload'][0])), 2, '0', STR_PAD_LEFT));
+$status = ord($answer['payload'][0]);
+
+if ($status !== 0) {
+    check('authenticatorGetInfo', false, 'statut CTAP ' . byte($status));
     exit(1);
 }
 
@@ -247,7 +377,7 @@ $transports = is_array($info['6'] ?? null) ? array_map('strval', $info['6']) : [
 $aaguid = (string) ($info['2'] ?? '');
 
 echo '  transports : ', implode(', ', $transports), PHP_EOL;
-echo '  aaguid : ', strlen($aaguid) === 16 ? bin2hex($aaguid) : 'absent', PHP_EOL;
+echo '  aaguid : ', strlen($aaguid) === 16 ? hex($aaguid) : 'absent', PHP_EOL;
 echo '  options : ', json_encode($info['4'] ?? [], JSON_UNESCAPED_SLASHES), PHP_EOL;
 
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;

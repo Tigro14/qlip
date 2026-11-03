@@ -140,6 +140,11 @@ l'API WebAuthn et les fonctions appelees sans etre definies. `tests/ctap_probe.p
 lancee par `run.sh` non plus : elle parle a une cle reelle (page d'usage F1D0, canal CTAPHID,
 `authenticatorGetInfo`) pour ce que la suite ne peut pas savoir, une cle n'ayant pas de
 verification utilisateur dans le faux authenticateur. Elle n'ecrit rien sur la cle.
+L'identifiant de rapport vient du descripteur (item Report ID, balise 8 en type Global) : la
+convention `0x20`/`0x21` ne s'applique pas a un device sans reports numerotes, et hidraw ne met
+rien au debut des octets lus dans ce cas. La trame recue est imprimee en octets bruts, parce
+qu'une reponse sans echo du nonce ne permet pas de distinguer une cle CTAP1 d'une erreur de
+tramage.
 
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web
