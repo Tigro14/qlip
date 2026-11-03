@@ -58,9 +58,10 @@ const U2F_VERSION = 0x03;
 /** Mots d etat ISO 7816 que la reponse U2F peut porter (les 2 derniers octets du payload). */
 const STATUS_WORDS = [
     0x9000 => 'succes',
-    0x6E00 => 'longueur de donnee incorrecte (le champ Lc manque)',
-    0x6400 => 'presence utilisateur demandee',
-    0x6A8A => 'key handle invalide',
+    0x6E00 => 'longueur de donnee incorrecte (Lc ne correspond pas a la donnee recue)',
+    0x6700 => 'longueur incorrecte',
+    0x6400 => 'conditions non remplies (presence utilisateur demandee)',
+    0x6A8A => 'donnees incorrectes (key handle invalide)',
     0x6D00 => 'commande non supportee',
 ];
 
@@ -466,31 +467,47 @@ if (($flags & CAP_CBOR) !== CAP_CBOR) {
     // Pas de CBOR : la cle ne peut pas repondre a un message CTAP2, donc pas de ceremonie WebAuthn
     // par cette interface. La version U2F se lit par CTAPHID_MSG, qui est une lecture.
     //
-    // Une requete U2F est une APDU : INS, P1, P2, Lc. Envoyer seulement l INS fait lire une longueur
-    // de donnee incorrecte a la cle, qui repond le mot d etat 6E 00. La requete fait donc 4 octets.
-    send($handle, $cid, CMD_MSG, chr(U2F_VERSION) . "\x00\x00\x00", $report ?? 0);
-    $answer = read_answer($handle, 10, $skip);
+    // Une requete U2F est une APDU : CLA pose a zero par le client, INS, P1, P2, puis la longueur
+    // des donnees. La longueur est annoncee sur 1 octet (APDU courte) ou 3 (APDU etendue), et CLA
+    // est soit dans le payload soit remplace par le transport : la cle repond 6E 00 quand ce n est
+    // pas la forme qu elle attend. Les formes sont donc essayees une par une, et c est la cle qui
+    // dit laquelle elle lit.
+    $forms = [
+        'INS + P1 + P2 + LC sur 1 octet' => chr(U2F_VERSION) . "\x00\x00\x00",
+        'INS + P1 + P2 + LC sur 3 octets' => chr(U2F_VERSION) . "\x00\x00\x00\x00\x00",
+        'CLA + INS + P1 + P2 + LC sur 1 octet' => "\x00" . chr(U2F_VERSION) . "\x00\x00\x00",
+    ];
 
-    if ($answer === null) {
-        exit(1);
+    $is_u2f = false;
+
+    foreach ($forms as $label => $payload) {
+        send($handle, $cid, CMD_MSG, $payload, $report ?? 0);
+        $answer = read_answer($handle, 10, $skip);
+
+        if ($answer === null) {
+            continue;
+        }
+
+        // Le mot d etat est en fin de payload (format APDU), la forme CTAP le met au debut : les
+        // deux donnent les memes octets quand il n y a pas de donnee, comme ici.
+        $word = strlen($answer['payload']) >= 2
+            ? (ord(substr($answer['payload'], -2, 1)) << 8) + ord(substr($answer['payload'], -1))
+            : 0;
+        $data = substr($answer['payload'], 0, strlen($answer['payload']) - 2);
+        $text = printable($data);
+
+        echo '  requete ', $label, ' : mot d etat ', strtoupper(str_pad(dechex($word), 4, '0', STR_PAD_LEFT)),
+            ' ', STATUS_WORDS[$word] ?? 'mot d etat inconnu',
+            ', donnee ', hex($data), $text !== '' ? ' (' . $text . ')' : '', PHP_EOL;
+
+        if ($word === 0x9000 && $text === 'U2F_V2') {
+            $is_u2f = true;
+
+            break;
+        }
     }
 
-    // La reponse est la chaine "U2F_V2" puis le mot d etat APDU. La balise est CTAPHID_MSG, mais
-    // une cle peut repondre sur la balise d erreur : la chaine est ce qui prouve CTAP1.
-    $text = printable($answer['payload']);
-    $is_u2f = str_contains($answer['payload'], 'U2F_V2');
-
-    echo '  reponse CTAPHID_MSG : balise ', byte($answer['cmd']), ' ', hex($answer['payload']),
-        $text !== '' ? ' (' . $text . ')' : '', PHP_EOL;
-
-    if (!$is_u2f && strlen($answer['payload']) >= 2) {
-        $word = (ord(substr($answer['payload'], -2, 1)) << 8) + ord(substr($answer['payload'], -1));
-
-        echo '    mot d etat ', strtoupper(str_pad(dechex($word), 4, '0', STR_PAD_LEFT)), ' ',
-            STATUS_WORDS[$word] ?? 'mot d etat inconnu', PHP_EOL;
-    }
-
-    check('cle qui parle CTAP1 (U2F)', $is_u2f, $is_u2f ? $text : 'pas de reponse U2F_V2');
+    check('cle qui parle CTAP1 (U2F)', $is_u2f, $is_u2f ? 'reponse U2F_V2' : 'aucune forme de requete ne donne U2F_V2');
     check(
         'la cle peut servir sur Qlip',
         false,
