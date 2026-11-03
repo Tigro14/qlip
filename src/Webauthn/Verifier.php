@@ -154,6 +154,9 @@ final class Verifier
         $key = CoseKey::toPem(Cbor::decode(base64url_decode($credential['cose'])));
         $message = hash('sha256', $authData, true) . hash('sha256', $clientDataRaw, true);
 
+        // La forme de la signature n'est pas un choix de controle : r || s (la spec) ou DER
+        // (la couche de compatibilite CTAP1 d une cle U2F seule) sont acceptees, la base
+        // verifiee reste hash(authData) + hash(clientData). Une forme malformee est refusee.
         if (!Signature::verify($message, base64url_decode($signatureB64url), $key)) {
             throw new \InvalidArgumentException('Signature invalide.');
         }
@@ -185,7 +188,7 @@ final class Verifier
      * @param array<string, mixed> $statement
      * @return bool
      */
-    private function verifyAttestation(array $statement, string $message, AuthenticatorData $data, bool $der = false): bool
+    private function verifyAttestation(array $statement, string $message, AuthenticatorData $data): bool
     {
         $signature = (string) $statement['sig'];
         $certificates = is_array($statement['x5c'] ?? null) ? $statement['x5c'] : [];
@@ -206,7 +209,7 @@ final class Verifier
 
             $alg = (string) ($statement['alg'] ?? 'RS256');
 
-            if (!Signature::verify($message, $signature, ['key' => $details['key'], 'alg' => $alg, 'type' => 'cert'], $der)) {
+            if (!Signature::verify($message, $signature, ['key' => $details['key'], 'alg' => $alg, 'type' => 'cert'])) {
                 return false;
             }
 

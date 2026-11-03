@@ -249,15 +249,18 @@ class FakeAuthenticator:
             "client_data": wf.b64url(client_data),
         }
 
-    def assert_(self, challenge, sign_count):
+    def assert_(self, challenge, sign_count, form="raw"):
         auth_data = wf.auth_data(self.flags(0x01), sign_count, self.credential_id, self.cose, False, RP_ID)
         client_data = wf.client_data("webauthn.get", ORIGIN, challenge)
+        wire = wf.wire_form(self.key, self.digest(auth_data, client_data), "ES256")
 
         return {
             "credential_id": wf.b64url(self.credential_id),
             "auth_data": wf.b64url(auth_data),
             "client_data": wf.b64url(client_data),
-            "signature": wf.b64url(wf.sign(self.key, self.digest(auth_data, client_data), "ES256")),
+            # La spec definit r || s pour une assertion ; la couche de compatibilite CTAP1
+            # d une cle U2F seule transmet le DER. Les deux doivent verifier la meme base.
+            "signature": wf.b64url(wire if form == "der" else wf.raw_signature(wire, 32)),
         }
 
 
@@ -476,6 +479,25 @@ def run():
     status, data = post_json("/webauthn/assert", dict(csrf=csrf, **yubikey.assert_(b64url_decode(ceremony["challenge"]), 2)))
 
     check("rejoue refuse", status == 400, data.get("error", ""))
+
+    # La forme DER est celle que la couche de compatibilite CTAP1 d une cle U2F seule transmet
+    # a l assertion : elle doit verifier la meme base que la forme brute r || s. Une cle separee
+    # est utilisee ici, sinon cette assertion consommerait le compteur attendu par les checks
+    # suivants.
+    der_key = FakeAuthenticator(b"claie-forme")
+    status, ceremony = get_json("/webauthn/challenge")
+    status, data = post_json("/webauthn/register", dict(csrf=csrf, **der_key.register(b64url_decode(ceremony["challenge"]))))
+
+    check("enregistrement pour la forme DER", status == 201, data.get("error", ""))
+
+    # La ceremony a regenere le jeton CSRF : on le relit.
+    csrf = csrf_of(get("/admin/yubikey")[2])
+    status, ceremony = get_json("/webauthn/challenge")
+    status, data = post_json("/webauthn/assert", dict(csrf=csrf, **der_key.assert_(b64url_decode(ceremony["challenge"]), 2, form="der")))
+
+    check("assertion en forme DER", status == 200 and data.get("ok") is True, data.get("error", ""))
+
+    csrf = csrf_of(get("/admin/yubikey")[2])
 
     # 10. Un compte non administrateur est refuse, meme avec une credential
     status, _, body = post("/logout", {"csrf": "mauvais-jeton"})

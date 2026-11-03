@@ -212,9 +212,11 @@ utilise le MTA local.
   valeurs du registre (`kty` EC2 = 2, RSA = 3, courbe P-256 = 1) ; une cle n'est retenue que
   si elle est coherent avec une seule numerotation, et `tests/webauthn_check.php` compare le
   PEM de PHP au DER produit par la reference Python : comparer PHP a lui meme ne suffit pas ;
-  signature raw `r||s` convertie en DER a la main
-  (`fido-u2f` remet deja une signature DER, donc `Signature::verify()` prend un drapeau
-  `$der`) ; tampons echanges en base64url. Formats d'attestation acceptes : `none`, `packed`
+  signature brute `r||s` convertie en DER a la main, et la forme DER acceptee telle quelle : une
+  cle U2F seule, qui passe par la couche de compatibilite CTAP1, remet le DER y compris pour une
+  assertion ; les deux formes sont lues et une forme malformee est refusee (le harnais porte un cas
+  `malformed` et la forme normalisee par PHP est comparee a celle de la reference Python) ; tampons
+  echanges en base64url. Formats d'attestation acceptes : `none`, `packed`
   (auto-attestation) et `fido-u2f` (`x5c` obligatoire, pas d'auto-attestation, pas d'AAGUID :
   l'identite de l'appareil vient du numero de serie du certificat), la racine est optionnelle.
   Cles du map CBOR d'attestation : `fmt`, `attStmt`, `authData` ; `attAuthData` n'existe pas

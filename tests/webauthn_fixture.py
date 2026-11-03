@@ -154,11 +154,25 @@ def client_data(client_type, origin, challenge=None):
     }, separators=(",", ":")).encode()
 
 
-def sign(key, message, alg):
+def wire_form(key, message, alg):
+    """La forme que le navigateur transmet telle quelle.
+
+    Une cle EC2 signe en DER SEQUENCE { INTEGER r, INTEGER s } quand elle passe par la couche
+    de compatibilite CTAP1 d une cle U2F seule, et en r || s quand elle signe directement au
+    niveau WebAuthn. Une cle RSA n a qu une forme : le block PKCS1 v1.5, la taille du modulo.
+    """
     if alg == "ES256":
-        return raw_signature(key.sign(message, ec.ECDSA(hashes.SHA256())), 32)
+        return key.sign(message, ec.ECDSA(hashes.SHA256()))
 
     return key.sign(message, padding.PKCS1v15(), hashes.SHA256())
+
+
+def sign(key, message, alg):
+    """r || s, la forme que la spec WebAuthn definit pour une assertion recue du navigateur."""
+    if alg == "ES256":
+        return raw_signature(wire_form(key, message, alg), 32)
+
+    return wire_form(key, message, alg)
 
 
 def fixture(
@@ -201,7 +215,9 @@ def fixture(
     # Assertion : compteur 2, plus de drapeau AT.
     assertion_data = auth_data(0x05 if can_verify else 0x01, 2, credential_id, cose, False)
     get_client = client_data("webauthn.get", ORIGIN)
-    signature = sign(key, hashlib.sha256(assertion_data).digest() + hashlib.sha256(get_client).digest(), alg)
+    message_assert = hashlib.sha256(assertion_data).digest() + hashlib.sha256(get_client).digest()
+    reference = wire_form(key, message_assert, alg)
+    signature = raw_signature(reference, 32) if alg == "ES256" else reference
 
     assertion = {
         "auth_data": b64url(assertion_data),
@@ -209,6 +225,23 @@ def fixture(
         "signature": b64url(signature),
         "sign_count": 2,
     }
+
+    # La meme signature dans l autre forme : r || s est la forme de la spec, le DER est celle
+    # que la couche de compatibilite CTAP1 d une cle U2F seule transmet. Les deux doivent
+    # verifier la meme base ; pour RSA il n y a qu une forme.
+    other_form = dict(assertion, signature=b64url(reference))
+
+    # Forme malformee : la longueur annoncee par la sequence ne couvre pas le contenu (EC2), et
+    # le block n a pas la taille du modulo (RSA). Elle doit etre refusee, sinon accepter le DER
+    # voudrait dire accepter n importels octets.
+    broken = bytearray(reference)
+
+    if alg == "ES256":
+        broken[1] = broken[1] + 1
+    else:
+        broken = bytearray(reference[:-1])
+
+    malformed = dict(assertion, signature=b64url(bytes(broken)))
 
     # Rejoue de la meme assertion : le compteur ne doit pas etre accepte deux fois.
     replay = dict(assertion, sign_count=2)
@@ -251,8 +284,11 @@ def fixture(
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
         )),
         "refused": refused,
+        "reference_form": None if refused else b64url(reference),
         "register": register,
         "assert": assertion,
+        "other_form": other_form,
+        "malformed": malformed,
         "replay": replay,
         "bad_origin": bad_origin,
         "bad_signature": bad_signature_case,

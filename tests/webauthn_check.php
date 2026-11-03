@@ -7,6 +7,7 @@ require __DIR__ . '/../src/autoload.php';
 use Qlip\Webauthn\Cbor;
 use Qlip\Webauthn\CoseKey;
 use Qlip\Webauthn\Policy;
+use Qlip\Webauthn\Signature;
 use Qlip\Webauthn\Verifier;
 
 $json = json_decode(file_get_contents(getenv('QLIP_WEBAUTHN_JSON') ?: '/tmp/opencode/webauthn.json'), true);
@@ -105,6 +106,13 @@ foreach ($json['fixtures'] as $fixture) {
         check('point x962 identique a la reference', CoseKey::x962(Cbor::decode(base64url_decode($registered['cose']))) === base64url_decode((string) ($fixture['point'] ?? '')));
     }
 
+    // La forme normalisee par PHP doit donner celle de la reference : comparer PHP a lui meme
+    // ne montrerait pas une longueur mal calculee.
+    check(
+        'forme de signature identique a la reference',
+        Signature::form(base64url_decode($fixture['assert']['signature']), $key['alg']) === base64url_decode((string) ($fixture['reference_form'] ?? ''))
+    );
+
     // Format fido-u2f : la signature porte sur 0x00 || rpIdHash || clientDataHash ||
     // credentialId || publicKeyU2F, pas sur hash(authData) + hash(clientData). Une signature
     // calculee sur l'autre base doit etre refusee : le controle porte sur ce sur quoi la
@@ -146,6 +154,40 @@ foreach ($json['fixtures'] as $fixture) {
         check('assertion', true, 'compteur ' . $asserted['sign_count']);
     } catch (Throwable $error) {
         check('assertion', false, $error->getMessage());
+    }
+
+    // Les deux formes de la signature doivent verifier la meme base : r || s (la forme de la
+    // spec) et le DER (la forme que la couche de compatibilite CTAP1 d une cle U2F seule
+    // transmet). Une forme malformee doit etre refusee : accepter le DER ne veut pas dire
+    // accepter n importels octets, et la base de signature n est pas la forme.
+    try {
+        $otherForm = $verifier->verifyAssertion(
+            $fixture['other_form']['auth_data'],
+            $fixture['other_form']['client_data'],
+            $fixture['other_form']['signature'],
+            $stored,
+            $json['challenge'],
+            $policy
+        );
+
+        check('autre forme de signature acceptee', $otherForm['sign_count'] === $fixture['other_form']['sign_count'], 'compteur ' . $otherForm['sign_count']);
+    } catch (Throwable $error) {
+        check('autre forme de signature acceptee', false, $error->getMessage());
+    }
+
+    try {
+        $verifier->verifyAssertion(
+            $fixture['malformed']['auth_data'],
+            $fixture['malformed']['client_data'],
+            $fixture['malformed']['signature'],
+            $stored,
+            $json['challenge'],
+            $policy
+        );
+
+        check('forme de signature malformee refusee', false);
+    } catch (Throwable $error) {
+        check('forme de signature malformee refusee', true, $error->getMessage());
     }
 
     // Rejoue : le meme compteur ne doit pas etre accepte deux fois.

@@ -160,8 +160,11 @@ Le navigateur fait la ceremony (`navigator.credentials`), PHP verifie :
    y = -3) et la numerotation heritee que Chrome emet encore (-1, -2, -3, -4, -5). Une cle
    qui n'est coherent avec aucune des deux est refusee.
 3. `POST /webauthn/assert` : drapeau UP, origine, hash du RP ID, challenge, compteur
-   strictement croissant, signature EC2/P-256 (`ES256`) ou RSA (`RS256`). La conversion
-   raw `r||s` en DER est faite a la main.
+   strictement croissant, signature EC2/P-256 (`ES256`) ou RSA (`RS256`). La forme brute
+   `r || s` est convertie en DER a la main, et la forme DER est acceptee telle quelle : une
+   cle U2F seule passe par la couche de compatibilite CTAP1, qui transmet le DER meme pour une
+   assertion. Ce qui est controle est la base de signature et la cle, pas l'encodage ; une forme
+   qui n'est ni `r || s` ni un DER lisible est refusee.
 
 La page `/admin` n'est accessible qu'avec une session confirmee par une assertion
 (`webauthn_at` en session), sur un compte marque administrateur.
@@ -224,10 +227,16 @@ avec les memes cles `fmt`, `attStmt`, `authData`. La base de signature est parti
 
 avec `publicKeyU2F = 0x04 || x || y`, le point COSE de la credential. Ce n'est pas le message
 WebAuthn `hash(authData) + hash(clientData)` : le premier octet est un contre-signal fixe
-(`0x00` pour l'attestation, `0x01` pour l'assertion). La signature arrive deja en DER, alors
-que celle d'une assertion recue du navigateur est brute `r||s`. `x5c` est obligatoire ici :
-sans certificat il n'y a rien a verifier, ce format n'a pas d'auto-attestation. Le harnais
+(`0x00` pour l'attestation, `0x01` pour l'assertion). `x5c` est obligatoire ici : sans
+certificat il n'y a rien a verifier, ce format n'a pas d'auto-attestation. Le harnais
 verifie la base avec le cas `bad_base` : une signature calculee sur l'autre base est refusee.
+
+La forme de la signature suit le transport. Une cle EC2 qui signe au niveau WebAuthn remet
+`r || s` ; une cle U2F seule passe par la couche de compatibilite CTAP1, qui remet le DER
+`SEQUENCE { INTEGER r, INTEGER s }` y compris pour une assertion. Les deux formes sont acceptees,
+parce que le controle porte sur la base de signature et sur la cle, pas sur l'encodage. Le
+harnais verifie les deux formes et qu'une forme malformee est refusee : accepter le DER ne veut
+pas dire accepter n'importe quels octets.
 
 ### Enrolement initial de la YubiKey
 
@@ -291,9 +300,16 @@ origine qui ne correspond pas au `rpId`. Les causes, dans l'ordre ou on les ecar
    pas le type de credential. Le membre `publicKey` est obligatoire sur `create()` comme sur
    `get()` ; la forme plate heritee de WebAuthn Level 1 (options au premier niveau) est refusee par
    Firefox, qui rejette la requete avant de parler a l'authenticateur.
-5. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
+5. Forme de la signature : une cle U2F seule remet la signature d'assertion en DER, la forme de
+   la couche de compatibilite CTAP1, pas en `r || s`. Les deux formes sont acceptees, une forme
+   malformee est refusee. Le harnais porte les deux formes et un cas malformé, donc la forme n'est
+   pas ce qui fait passer une signature.
+6. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
    `NotSupportedError`) : un echec immediat, avant tout prompt, vient des options ou de
-   l'origine ; un echec apres le prompt vient d'une annulation ou du delai depasse.
+   l'origine ; un echec apres le prompt vient d'une annulation ou du delai depasse. Une erreur
+   ecrite par le serveur (`Signature invalide`, `Verification utilisateur exigee`, `Compteur de
+   signature non croissant`) vient apres la reponse de la cle : la cle a repondu, c'est le controle
+   qui a refuse.
 
 En resume : inscription avec l'adresse d'administration, verification d'email, connexion
 par mot de passe, enregistrement de la cle, assertion, `/admin`. Le mot de passe ne sert
@@ -342,6 +358,59 @@ session que cette cle avait apportee (`webauthn_at`) : la page d administration 
 assertion. Supprimer une autre cle du meme compte ne change pas la confirmation, la session
 garde la credential qui l a faite.
 
+### Effacer la cle quand la ceremony ne marche plus
+
+Une cle enregistree ferme le compte au mot de passe seul : `POST /login` met la session en
+attente, et seule la ceremony `POST /login/2fa` l ouvre. Si la ceremony echoue, aucune session ne
+peut etre ouverte, donc aucune route de suppression ne peut etre appelee : elle est POST seulement,
+exige le jeton CSRF de la session, la confirmation explicite et le mot de passe, et `/admin` exige
+une assertion, ce qui est justement ce qui echoue. Ce blocage n est pas une exception a ces regles :
+la regle « POST seulement, jeton, mot de passe, appartenance » est plus importante que la
+possibilite de detruire sans s etre authentifie.
+
+Deux cas, dans l ordre :
+
+1. La cle refonctionne (la ceremony echouait du cote du navigateur, ou la cle etait seulement
+   ecartee par la politique) : `Presente la cle` depuis le tableau de bord, puis supprimer la cle
+   par le formulaire. C est la seule facon d effacer la cle depuis l application, et la trace est
+   ecrite par elle.
+
+2. La cle est perdue, ou la ceremony echoue cote serveur : la ligne doit etre retiree hors
+   application, et la ligne d audit doit etre ecrite a la main, parce que le journal ne peut pas
+   savoir ce qu une action hors application a detruit. La ligne est lue avant d etre supprimee, le
+   `credential_id` est reporte dans le detail, et les deux ecritures tiennent dans la meme
+   transaction.
+
+```bash
+DB=/opt/WebSites/qlip.tigro.fr/data/qlip.sqlite
+
+# Ce que la ligne porte, avant de la retirer : le detail de la trace doit reprendre l identifiant
+sqlite3 "file:$DB?mode=ro" \
+    "select id, user_id, credential_id, policy, uv_seen, sign_count from webauthn_credentials;"
+
+# Retirer la cle et garder la trace. Le nom de l action est celui de l application, et le detail
+# dit que la ligne est ecrite hors application : sinon le journal laisse croire que la route a ete
+# appelee, et on ne peut plus distinguer une action d un geste manuel.
+sqlite3 "$DB" "BEGIN;
+DELETE FROM webauthn_credentials WHERE id = 1;
+INSERT INTO audit_log (user_id, action, detail, created_at)
+VALUES (1, 'credential_supprimee',
+        'cle retiree hors application : la ceremony echouait, aucune session possible',
+        datetime('now'));
+COMMIT;"
+```
+
+- le compte redevient accessible par le seul mot de passe : `POST /login` ne trouve plus de
+  credential, donc la session n est plus mise en attente ;
+- la confirmation de la session (`webauthn_at`) ne vient pas de la base, elle est dans la session :
+  se deconnecter est necessaire, sinon une session laissee ouverte garde la confirmation d une cle
+  qui n existe plus ;
+- le nom de l action reste `credential_supprimee` : le quota du jour compte `action = 'badge'`, donc
+  une suppression n entre pas dans le comptage, qu elle soit faite par la route ou a la main ;
+- la cle est ensuite a re-enregistrer depuis le tableau de bord (profil `presence`), et une cle qui
+  doit ouvrir `/admin` doit etre enregistree depuis la page d administration (profil `passkey`), ce
+  qu une cle U2F seule ne peut pas satisfaire.
+
 Le quota de 10 creations par jour porte sur les evenements de creation (`action = 'badge'`
 dans `audit_log`), pas sur les lignes qui restent : supprimer un badge ne rembourse pas le
 quota. Sinon on pourrait creer, supprimer, creer sans limite.
@@ -365,7 +434,9 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
    la cle COSE est ecrite avec les deux numerotations de labels (celle du registre et la
    numerotation heritee), et le PEM construit par PHP est compare au DER produit par la
-   reference Python ; un map melangeant les deux doit etre refuse ;
+   reference Python ; un map melangeant les deux doit etre refuse ; les deux formes de
+   signature (`r || s` et DER) sont verifiees sur la meme base, et une forme malformee doit
+   etre refusee ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    reinitialisation de mot de passe : lien usage unique, 24 h, adresse sans compte, verou de
    5 demandes, jetons du compte fermes, pages, quotas par compte, exports etancheite, CSRF,
