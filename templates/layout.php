@@ -37,5 +37,10 @@
 <footer>
     QR en PHP pur, STL ASCII et 3MF. YubiKey 2FA par WebAuthn, SQLite local.
 </footer>
+
+<!-- Le script est externe : script-src 'self' autorise un fichier du site, pas une balise
+     inline. La ceremonie WebAuthn est dans app.js, donc sans cette ligne les boutons de la
+     page YubiKey ne font rien. -->
+<script src="<?= attr(url('assets/app.js')) ?>" defer></script>
 </body>
 </html>

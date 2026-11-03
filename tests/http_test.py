@@ -354,6 +354,7 @@ def run():
     check("page YubiKey", status == 200)
 
     check("bouton d enrolement pour un admin", b'data-action="register"' in body)
+    check("page YubiKey charge app.js", b"assets/app.js" in body, "script externe, jamais inline")
 
     csrf = csrf_of(body)
 

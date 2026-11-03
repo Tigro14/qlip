@@ -209,6 +209,14 @@ def run():
 
         check("asset %s" % name, ok, "%d %s -> %s" % (status, headers.get("content-type", ""), origin(headers)))
 
+    # Le fichier est servi, encore faut-il que la page le charge : la ceremonie WebAuthn est
+    # dans app.js, et le CSP autorise un fichier du site (script-src 'self'), pas une balise
+    # inline. Ce qu une extension injecte dans la page est refuse par le CSP : c est le
+    # comportement attendu, pas un bug de l app.
+    status, headers, body = get("/login", anonymous)
+
+    check("page charge app.js", status == 200 and answered_by_app(headers) and b"assets/app.js" in body, "%d -> %s" % (status, origin(headers)))
+
     # 3b. Sonde : .htaccess est un fichier reel du depot, a la racine du document root.
     # Le serveur doit le refuser par sa propre configuration (403, sans CSP). Une 404 de
     # l'app veut dire que le fichier n'est pas trouve : le document root n'est pas le

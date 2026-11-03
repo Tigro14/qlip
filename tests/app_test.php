@@ -443,6 +443,11 @@ if (!is_array($fixtures)) {
 
     check('bouton d enrolement pour un admin', str_contains($response->body(), 'data-action="register"'));
 
+    // La ceremonie WebAuthn se fait dans le navigateur, dans app.js. Le CSP autorise
+    // script-src 'self' : un fichier du site, pas une balise inline. Si le layout ne charge
+    // pas le script, les boutons ne font rien et l enrolement est impossible.
+    check('app.js charge par la page', str_contains($response->body(), 'src="http://qlip.test/assets/app.js"'), $response->body());
+
     $response = $send('GET', '/admin');
 
     check('admin bloque avant la premiere assertion', str_contains($response->header('Location') ?? '', '/admin/yubikey'));
