@@ -208,7 +208,7 @@ def run():
     # 3. Assets : ils sont servis par le serveur web. Un 404 de l'app veut dire que le
     # fichier n'est pas trouve par le serveur : il manque dans le document root (ou le
     # document root n'est pas le depot).
-    for name, expected in (("app.css", "text/css"), ("app.js", "javascript"), ("theme.js", "javascript"), ("img/key.png", "image/png")):
+    for name, expected in (("app.css", "text/css"), ("app.js", "javascript"), ("theme.js", "javascript"), ("tabs.js", "javascript"), ("img/key.png", "image/png")):
         status, headers, body = get("/assets/" + name)
         local = os.path.join(ROOT, "public/assets", name)
         ok = status == 200 and expected in headers.get("content-type", "")

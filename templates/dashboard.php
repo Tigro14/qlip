@@ -92,34 +92,49 @@
         <p class="note">Aucun badge.</p>
     <?php endif; ?>
 
-    <table>
-        <thead>
-            <tr><th>#</th><th>Page</th><th>Style</th><th>Bicolore</th><th>Date</th><th>Fichiers</th><th>Supprimer</th></tr>
-        </thead>
-        <tbody>
-            <?php foreach ($badges as $badge): ?>
-                <tr>
-                    <td><?= (int) $badge['id'] ?></td>
-                    <td><code><?= e($badge['slug'] ?? '') ?></code></td>
-                    <td><?= e($badge['style']) ?></td>
-                    <td><?= $badge['bicolor'] ? 'oui' : 'non' ?></td>
-                    <td><?= e($badge['created_at']) ?></td>
-                    <td>
-                        <a href="<?= attr(url('badges/' . $badge['id'] . '/stl')) ?>">STL</a>
-                        <a href="<?= attr(url('badges/' . $badge['id'] . '/3mf')) ?>">3MF</a>
-                    </td>
-                    <td>
-                        <form method="post" action="<?= attr(url('badges/' . $badge['id'] . '/delete')) ?>" class="inline">
-                            <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+    <?php if ($badges !== []): ?>
+        <!-- Le contenu ne depend pas du script : les onglets sont des liens vers une ancre et
+             tous les panneaux sont rendus, donc sans JavaScript la page reste une liste. Le
+             script ajoute les roles d onglets et masque le panneau non choisi, il ne remplace
+             rien. -->
+        <div class="tabs" data-tabs>
+            <div class="tablist">
+                <?php foreach ($badges as $badge): ?>
+                    <a class="tab" id="tab-<?= (int) $badge['id'] ?>" href="#badge-<?= (int) $badge['id'] ?>">
+                        #<?= (int) $badge['id'] ?> <code><?= e($badge['slug'] ?? '') ?></code>
+                    </a>
+                <?php endforeach; ?>
+            </div>
 
-                            <label><input type="checkbox" name="confirm" value="1"> Confirmer</label>
-                            <button type="submit">Supprimer</button>
-                        </form>
-                    </td>
-                </tr>
+            <?php foreach ($badges as $badge): ?>
+                <section class="panel" id="badge-<?= (int) $badge['id'] ?>">
+                    <img class="qr" src="<?= attr(url('qr/' . $badge['slug'] . '.png')) ?>"
+                         alt="QR de la page <?= attr($badge['slug'] ?? '') ?>" width="120" height="120">
+
+                    <p class="note">
+                        <code><?= e($badge['slug'] ?? '') ?></code> -
+                        <?= e($badge['style']) ?> -
+                        bicolore <?= $badge['bicolor'] ? 'oui' : 'non' ?> -
+                        <?= (float) ($badge['dimensions']['width'] ?? 0) ?> x <?= (float) ($badge['dimensions']['height'] ?? 0) ?> mm,
+                        epaisseur <?= (float) ($badge['dimensions']['thickness'] ?? 0) ?> mm,
+                        profondeur <?= (float) ($badge['dimensions']['depth'] ?? 0) ?> mm
+                    </p>
+
+                    <p>
+                        <a class="button" href="<?= attr(url('badges/' . $badge['id'] . '/stl')) ?>">STL</a>
+                        <a class="button" href="<?= attr(url('badges/' . $badge['id'] . '/3mf')) ?>">3MF</a>
+                    </p>
+
+                    <form method="post" action="<?= attr(url('badges/' . $badge['id'] . '/delete')) ?>">
+                        <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                        <label><input type="checkbox" name="confirm" value="1" required> Confirmer la suppression</label>
+                        <button type="submit">Supprimer</button>
+                    </form>
+                </section>
             <?php endforeach; ?>
-        </tbody>
-    </table>
+        </div>
+    <?php endif; ?>
 
     <h2>Second facteur (YubiKey)</h2>
 

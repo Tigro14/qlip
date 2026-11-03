@@ -52,5 +52,10 @@
      inline. La ceremonie WebAuthn est dans app.js, donc sans cette ligne les boutons de la
      page YubiKey ne font rien. -->
 <script src="<?= attr(url('assets/app.js')) ?>" defer></script>
+
+<!-- Les onglets de badges sont un repli : le template rend tous les panneaux, le script ne
+     fait que masquer ceux qui ne sont pas choisis. defer convient ici, le contenu est deja
+     rendu quand il s execute. -->
+<script src="<?= attr(url('assets/tabs.js')) ?>" defer></script>
 </body>
 </html>

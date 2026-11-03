@@ -374,7 +374,14 @@ def run():
     created = []
 
     for index in range(10):
-        status, data = post_json("/badges", {"csrf": csrf, "slug": slug, "style": "engraved", "bicolor": "1" if index == 4 else "0"})
+        payload = {"csrf": csrf, "slug": slug, "style": "engraved", "bicolor": "1" if index == 4 else "0"}
+
+        # Des dimensions qui ne sont pas les valeurs par defaut du formulaire : l onglet doit
+        # afficher le design enregistre avec la creation, pas ce que le formulaire propose.
+        if index == 2:
+            payload.update({"width": 25, "height": 55, "thickness": 4, "depth": 1.5})
+
+        status, data = post_json("/badges", payload)
 
         if status != 201:
             check("badge %d" % (index + 1), False, data.get("error", ""))
@@ -413,6 +420,52 @@ def run():
     problems = stl_check.check_3mf(path, counts)
 
     check("3MF valide", problems == [], problems[0] if problems else "%d triangles" % sum(counts))
+
+    # 8b. Onglets de badges sur le tableau de bord. Le script n est pas execute par la suite,
+    # donc ce que la suite verifie est le repli : le template rend la liste complete, sans
+    # dependre du script. Les roles d onglets sont poses par tabs.js, et ils ne sont vrais que
+    # quand un seul panneau est montre, donc ils ne doivent pas etre dans le template.
+
+    status, _, body = get("/dashboard")
+
+    check("onglets presents sur le tableau de bord", status == 200 and b"data-tabs" in body and b'class="tablist"' in body)
+
+    panels = [(int(m.group(1)), m.group(2)) for m in re.finditer(rb'<section class="panel" id="badge-(\d+)">(.*?)</section>', body, flags=re.S)]
+    tabs = re.findall(rb'<a class="tab" id="tab-(\d+)" href="#badge-(\d+)"', body)
+
+    check("un panneau par badge", sorted(n for n, _ in panels) == sorted(created), "%d panneaux" % len(panels))
+    check(
+        "chaque onglet pointe sur son panneau",
+        len(tabs) == len(created) and all(tab[0] == tab[1] for tab in tabs),
+        "%d onglets" % len(tabs),
+    )
+    check(
+        "repli sans JavaScript : le template ne masque aucun panneau",
+        re.search(rb'<section class="panel"[^>]*hidden', body) is None,
+        "le script ajoute hidden quand il s execute, le template rend la liste",
+    )
+    check(
+        "les roles d onglets ne sont pas dans le template",
+        b'role="tab"' not in body and b'role="tabpanel"' not in body,
+        "un role=tab avec tous les panneaux ouverts annoncerait des onglets sur une page qui n en est pas",
+    )
+    check(
+        "les liens et la suppression sont dans le panneau",
+        all((b"/badges/%d/stl" % n) in block and (b"/badges/%d/3mf" % n) in block and (b"/badges/%d/delete" % n) in block for n, block in panels),
+        "le panneau, pas la ligne d onglet",
+    )
+    check("le panneau montre l apercu du QR", all(b'<img class="qr"' in block for _, block in panels))
+
+    # Les dimensions affichees viennent du design enregistre, donc le badge cree avec 25 x 55
+    # doit les rendre, et les valeurs par defaut ne doivent pas apparaitre sur son panneau.
+    panel = dict(panels)
+    block = panel.get(created[2], b"")
+
+    check(
+        "dimensions du design enregistre, pas les valeurs par defaut",
+        b"25 x 55 mm" in block and b"epaisseur 4 mm" in block and b"profondeur 1.5 mm" in block and b"34 x 40 mm" not in block,
+        str(block[:120]),
+    )
 
     # 9. YubiKey : enregistrement puis assertion
     status, _, body = get("/admin/yubikey")
@@ -465,6 +518,19 @@ def run():
         "un script defer s execute apres le parse : la page bascule apres le premier paint",
     )
     check("switch de theme dans le nav", b'data-theme-toggle' in home, "le bouton est le dernier element du nav")
+
+    # Les onglets sont un comportement de script, la feuille ne sait pas associer un onglet a son
+    # panneau. Elle doit quand meme porter la regle qui masque le panneau non choisi : l attribut
+    # hidden ne suffit pas des qu une regle donne une valeur a display sur le panneau.
+
+    sheet = open(os.path.join(ROOT, "public", "assets", "app.css"), encoding="utf-8").read()
+
+    check("page charge tabs.js", b"assets/tabs.js" in home, "script externe, jamais inline")
+    check(
+        "feuille : le panneau non choisi est masque par la regle sur hidden",
+        ".panel[hidden]" in sheet and ".tablist" in sheet and ".tab[aria-selected" in sheet,
+        "sans la regle, un display sur le panneau rendrait tous les panneaux visibles",
+    )
 
     csrf = csrf_of(body)
 

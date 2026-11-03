@@ -121,6 +121,16 @@ final class Badges
         );
     }
 
+    /**
+     * Le design enregistre avec la creation, relu tel qu il a ete ecrit : il porte les
+     * dimensions utilisees ce jour la, pas les valeurs par defaut. Une creation enregistree
+     * sans ces valeurs rend un design vide, et l affichage doit le dire.
+     */
+    public function designOf(array $badge): array
+    {
+        return Design::fromArray(json_decode((string) ($badge['design'] ?? ''), true) ?: [])->toArray();
+    }
+
     /** @return array<string, mixed>|null */
     public function badgeById(int $id): ?array
     {

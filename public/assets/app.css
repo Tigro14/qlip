@@ -364,6 +364,50 @@ tbody tr:hover {
     border-color: var(--accent);
 }
 
+/* Onglets de badges. Le template rend la liste complete : les onglets sont des liens vers une
+   ancre et tous les panneaux sont rendus, donc sans JavaScript la page reste une liste
+   consultable. Le script ajoute les roles et masque le panneau non choisi ; l attribut hidden
+   ne suffit pas des qu une regle donne une valeur a display sur le panneau, donc la regle est
+   ecrite ici en plus de celle du navigateur. Le panneau n est pas colore comme une carte : il
+   est le contenu de l onglet, pas une carte posee sur la page. */
+.tablist {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin: 0 0 0.75rem;
+}
+
+.tab {
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0.25rem 0.55rem;
+    text-decoration: none;
+}
+
+.tab:hover {
+    color: var(--ink);
+    border-color: var(--accent);
+}
+
+.tab[aria-selected='true'] {
+    color: var(--ink);
+    border-color: var(--accent);
+    font-weight: 700;
+}
+
+.panel {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin: 0.75rem 0;
+}
+
+.panel[hidden] {
+    display: none;
+}
+
 .card {
     border: 1px solid var(--line);
     border-radius: var(--radius);
