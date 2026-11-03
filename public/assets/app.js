@@ -55,6 +55,25 @@ async function getCeremony(element) {
     return json(base + 'webauthn/challenge', { headers: { Accept: 'application/json' } });
 }
 
+// L objet d attestation (fmt, attStmt, authData) est la propriete attestationObject dans la
+// version courante de la spec. getAttestation() etait la forme de Level 1 : elle n'existe pas
+// partout, donc un seul des deux noms fait echouer la ceremonie avec un TypeError dans l'autre
+// navigateur. Les deux formes sont acceptees, et l'erreur dit ce qui manque.
+function attestationBytes(response) {
+    const bytes = response.attestationObject !== undefined
+        ? response.attestationObject
+        : (typeof response.getAttestation === 'function' ? response.getAttestation() : null);
+
+    if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0) {
+        throw new Error(
+            'Objet d attestation indisponible : ni la propriete attestationObject ni la methode '
+            + 'getAttestation. Le navigateur a renvoye une ceremonie sans objet CBOR.'
+        );
+    }
+
+    return bytes;
+}
+
 function report(element, message, level) {
     const box = element.querySelector('.result');
     box.textContent = message;
@@ -115,9 +134,10 @@ async function registerCredential(element) {
         body: JSON.stringify({
             csrf: csrf,
             credential_id: toBase64Url(credential.rawId),
-            // getAttestation() renvoie l objet CBOR brut (fmt, attStmt, authData) tel que le
-            // navigateur l a recu de l authenticateur. Il n y a pas de methode attestationBytes.
-            attestation: toBase64Url(credential.response.getAttestation()),
+            // L objet CBOR brut (fmt, attStmt, authData) tel que le navigateur l'a recu de
+            // l'authenticateur. Pour une cle U2F seule c'est le format fido-u2f : le navigateur
+            // construit le map, il n'y a pas de methode attestationBytes.
+            attestation: toBase64Url(attestationBytes(credential.response)),
             client_data: toBase64Url(credential.response.clientDataJSON),
         }),
     });

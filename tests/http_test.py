@@ -407,7 +407,8 @@ def run():
     keywords = {"if", "for", "while", "switch", "return", "catch", "typeof", "new", "throw", "function", "of", "in"}
     called = set(re.findall(r"(?<![\w.$\])}])([A-Za-z0-9_$]+)\s*\(", source)) - keywords
 
-    check("app.js : objet d attestation lu par getAttestation()", "getAttestation()" in script, "la methode de l API, pas un helper invente")
+    check("app.js : objet d attestation lu par la propriete attestationObject", "attestationObject" in script, "la forme de la spec courante, pas un nom invente")
+    check("app.js : l ancienne forme getAttestation() reste acceptee", "typeof response.getAttestation" in script, "elle n existe pas dans tous les navigateurs : un seul nom donne un TypeError")
     check("app.js : liste de credentials prise du challenge", "ceremony.allowCredentials" in script, "une cle non resident ne retrouve pas son identifiant seule")
     check("app.js : politique lue des options du serveur", "ceremony.policy" in script, "le client ne choisit pas sa politique de verification")
     check("app.js : cible d assertion prise de la page", "element.dataset.assert" in script, "la ceremonie du second facteur ne va pas a celle d administration")
