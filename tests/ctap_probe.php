@@ -10,7 +10,9 @@ use Qlip\Webauthn\Cbor;
  * Sonde CTAP : lit ce que la suite ne peut pas verifier, parce que la suite n'a pas de vrai
  * authenticateur : la cle est-elle vue comme un authenticateur CTAP (et pas seulement comme un
  * lecteur de cartes), parle-t-elle CTAP2 (CBOR) ou seulement CTAP1 (U2F), et peut-elle faire la
- * verification utilisateur demandee par l'app (userVerification 'required').
+ * verification utilisateur exigee par le profil passkey (userVerification 'required'). Le profil
+ * presence (second facteur, discouraged) est le seul qu une cle CTAP1 peut satisfaire : elle sert
+ * comme preuve de possession, le mot de passe restant la preuve de l utilisateur.
  *
  * La cle doit etre branchee sur la machine qui execute le script. Le device est en acces root
  * (crw-------), ou ouvert par une regle udev seulement a des utilisateurs systeme (sssd,
@@ -510,12 +512,25 @@ if (($flags & CAP_CBOR) !== CAP_CBOR) {
     }
 
     check('cle qui parle CTAP1 (U2F)', $is_u2f, $is_u2f ? 'reponse U2F_V2' : 'aucune forme de requete ne donne U2F_V2');
+
+    // Ce qui manque a une cle CTAP1 est la verification utilisateur, pas l attestation : le
+    // navigateur convertit la reponse U2F en objet d attestation avec les cles de la spec (fmt =
+    // fido-u2f, attStmt avec sig et x5c, authData), et ce format est accepte par l app. Donc la cle
+    // sert comme second facteur, la ou la politique est celle du profil presence (discouraged) : le
+    // mot de passe prouve l utilisateur, la cle prouve la possession. Elle ne peut pas satisfaire le
+    // profil passkey (required) de la page d administration.
+
     check(
-        'la cle peut servir sur Qlip',
-        false,
-        'CTAP1 ne fait pas la verification utilisateur, et l app attend un objet d attestation CBOR '
-            . '(fmt, attStmt, authData) que la ceremonie U2F ne produit pas. La cle marche sur les sites '
-            . 'qui font U2F, ou WebAuthn avec userVerification preferred, pas avec required'
+        'cle utilisable comme second facteur (profil presence)',
+        $is_u2f,
+        'format fido-u2f accepte par l app, et le profil presence est discouraged : le mot de passe '
+            . 'a deja prouve l utilisateur'
+    );
+    check(
+        'profil passkey (required) inaccessible avec cette cle',
+        $is_u2f,
+        'la cle ne sait pas faire la verification utilisateur : un administrateur dont la seule cle '
+            . 'est une cle U2F entre par mot de passe + possession, pas par une assertion seule'
     );
 
     echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
