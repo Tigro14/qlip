@@ -1,10 +1,63 @@
+/*
+    Feuille appliquee.
+
+    Toutes les valeurs de style viennent des variables de :root. La version sombre
+    est le meme jeu de regles avec d autres valeurs : une regle qui porte une
+    couleur en dur ne suivrait pas le theme, et la feuille serait double. Donc
+    aucune couleur n est ecrite dans une regle, seulement dans les variables.
+*/
+
 :root {
+    /* Le theme suit la preference du systeme. color-scheme est indispensable :
+       sans lui les controles natifs (liste deroulante, case, barre de defilement,
+       saisie automatique du navigateur) restent en clair sur un fond sombre. */
+    color-scheme: light dark;
+
+    --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: ui-monospace, 'SFMono-Regular', monospace;
+
+    --bg: #ffffff;
+    --surface: #f4f4f2;
     --ink: #1a1a1a;
-    --paper: #ffffff;
-    --muted: #6a6a6a;
-    --line: #d8d8d8;
+    --muted: #67676b;
+    --line: #d5d5d1;
     --accent: #2f6f4f;
     --error: #a4323a;
+    --ok-bg: #edf3ef;
+    --err-bg: #f5ecee;
+
+    /* Le QR n est pas inverti en mode sombre : le PNG est genere avec des modules
+       fonces sur fond blanc, et un QR lu a l ecran ou par la camera doit garder ce
+       contraste. La plaque claire autour de l image est donc une regle de lisibilite,
+       pas une decoration. */
+    --qr-plate: #ffffff;
+
+    /* Un filigrane est un bitmap : sa couleur ne peut pas suivre les variables de theme,
+       donc seule l opacite est pilotee. Le fichier est un rendu en couleur, pas un dessin a
+       l encre : on ne peut pas l inverser en mode sombre, l inversion tournerait les
+       couleurs de l objet et laisserait le fond tel quel. */
+    --watermark: 0.14;
+
+    --radius: 6px;
+    --radius-sm: 4px;
+    --max: 900px;
+    --pad: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #16181a;
+        --surface: #1f2225;
+        --ink: #e6e6e2;
+        --muted: #a2a4a8;
+        --line: #34383b;
+        --accent: #6cc08c;
+        --error: #e08a90;
+        --ok-bg: #1c2822;
+        --err-bg: #2b1d1f;
+
+        --watermark: 0.10;
+    }
 }
 
 * {
@@ -12,18 +65,19 @@
 }
 
 body {
-    margin: 0;
-    font: 16px/1.5 system-ui, sans-serif;
+    margin: 0 auto;
+    max-width: var(--max);
+    padding: 0 var(--pad) 3rem;
+    font: 1rem/1.55 var(--font);
     color: var(--ink);
-    background: var(--paper);
-    max-width: 900px;
-    padding: 0 1rem 3rem;
+    background: var(--bg);
 }
 
 .bar {
     display: flex;
     align-items: center;
     gap: 1rem;
+    flex-wrap: wrap;
     padding: 1rem 0;
     border-bottom: 1px solid var(--line);
 }
@@ -36,6 +90,7 @@ body {
 
 nav {
     display: flex;
+    align-items: center;
     gap: 0.75rem;
     flex-wrap: wrap;
     margin-left: auto;
@@ -47,8 +102,12 @@ nav button {
     text-decoration: none;
 }
 
+/* Les tableaux d administration font jusqu a neuf colonnes : sur un telephone la table
+   depasse le contenu. Sans conteneur dans la page, le seul endroit qui peut defiler est
+   main, donc la table ne casse pas la largeur de la page. */
 main {
     padding: 1.5rem 0;
+    overflow-x: auto;
 }
 
 footer {
@@ -60,12 +119,14 @@ footer {
 
 h1 {
     font-size: 1.5rem;
+    line-height: 1.25;
     margin: 0 0 1rem;
+    text-wrap: balance;
 }
 
 h2 {
     font-size: 1.15rem;
-    margin: 1.5rem 0 0.75rem;
+    margin: 1.75rem 0 0.75rem;
 }
 
 h3 {
@@ -82,18 +143,51 @@ p {
     font-size: 0.9rem;
 }
 
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
 code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
     font-size: 0.9em;
-    background: #f2f2f2;
-    padding: 0.1rem 0.3rem;
-    border-radius: 4px;
+    background: var(--surface);
+    padding: 0.1rem 0.35rem;
+    border-radius: var(--radius-sm);
     overflow-wrap: anywhere;
 }
 
+ul {
+    margin: 0 0 1rem;
+    padding-left: 1.25rem;
+}
+
+ul.note li {
+    margin-bottom: 0.4rem;
+}
+
+/* Les formules sont la seule chose que l on remplit : le champ est aligne sous son
+   libelle, avec une largeur minimale, sinon un formulaire parait plus large que la
+   page et les champs d une table n ont pas la meme taille que ceux du haut.
+
+   Une libelle de case est l exception : la case est le premier enfant, donc en grille
+   le texte partirait sur la ligne suivante et la case se retrouverait isolee au-dessus
+   de ce qu elle nomme. Elle reste sur une ligne, avec son texte. */
 label {
-    display: block;
+    display: grid;
+    gap: 0.3rem;
     margin: 0.5rem 0;
+    font-size: 0.92rem;
+}
+
+label:has(input[type='checkbox']) {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
 }
 
 input,
@@ -101,20 +195,40 @@ select,
 textarea,
 button {
     font: inherit;
-    padding: 0.4rem 0.5rem;
+    padding: 0.45rem 0.55rem;
     border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--paper);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
     color: var(--ink);
+}
+
+input:not([type='checkbox']):not([type='number']),
+select {
+    min-width: 14rem;
+}
+
+input[type='number'] {
+    min-width: 6rem;
 }
 
 input[type='checkbox'] {
     width: auto;
+    accent-color: var(--accent);
 }
 
 textarea {
     width: 100%;
     min-height: 5rem;
+    resize: vertical;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 button,
@@ -122,11 +236,18 @@ button,
     display: inline-block;
     border: 1px solid var(--ink);
     background: var(--ink);
-    color: var(--paper);
+    color: var(--bg);
     padding: 0.45rem 0.8rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     text-decoration: none;
     cursor: pointer;
+}
+
+button:hover,
+.button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg);
 }
 
 button:disabled {
@@ -135,8 +256,13 @@ button:disabled {
 }
 
 button.secondary {
-    background: var(--paper);
+    background: var(--bg);
     color: var(--ink);
+}
+
+button.secondary:hover {
+    color: var(--accent);
+    border-color: var(--accent);
 }
 
 form.inline {
@@ -149,12 +275,42 @@ table {
     font-size: 0.92rem;
 }
 
-th,
-td {
-    border-bottom: 1px solid var(--line);
+th {
     text-align: left;
+    font-weight: 600;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line);
+    padding: 0.4rem 0.5rem;
+    white-space: nowrap;
+}
+
+td {
+    text-align: left;
+    border-bottom: 1px solid var(--line);
     padding: 0.35rem 0.5rem;
     vertical-align: top;
+}
+
+td label {
+    margin: 0;
+}
+
+/* Un champ de table ne prend pas la largeur minimale d un champ de formulaire : neuf
+   colonnes avec des champs de 14rem ne tiennent pas sur un ecran, et la table se met a
+   defiler pour rien. */
+td input {
+    min-width: 8rem;
+}
+
+td form {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+tbody tr:hover {
+    background: var(--surface);
 }
 
 .pager {
@@ -169,34 +325,41 @@ td {
     color: var(--accent);
     text-decoration: none;
     border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius-sm);
+    padding: 0.25rem 0.55rem;
 }
 
 .pager .current {
     font-weight: 700;
+    color: var(--ink);
+    border-color: var(--accent);
 }
 
 .card {
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: var(--radius);
+    background: var(--surface);
     padding: 1rem;
     margin: 0.75rem 0;
 }
 
 .flash {
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
+    padding: 0.55rem 0.75rem;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--line);
+    background: var(--surface);
+    margin: 0 0 0.75rem;
 }
 
 .flash-ok {
     border-color: var(--accent);
+    background: var(--ok-bg);
     color: var(--accent);
 }
 
 .flash-err {
     border-color: var(--error);
+    background: var(--err-bg);
     color: var(--error);
 }
 
@@ -206,7 +369,11 @@ td {
 
 .qr {
     image-rendering: pixelated;
+    background: var(--qr-plate);
     border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem;
+    max-width: 100%;
 }
 
 .public-page .qr {
@@ -214,7 +381,66 @@ td {
     height: 220px;
 }
 
-ul {
-    margin: 0 0 1rem;
-    padding-left: 1.25rem;
+/* Illustration du porte-cles. Le fichier est servi par le serveur web, pas par l app :
+   s il manque sur le serveur, la requete part au front controller et rend 404. Le chemin
+   est relatif a la feuille (servee depuis /assets/), sinon une instance deposee dans un
+   sous-dossier pointe au mauvais endroit.
+
+   Le filigrane est porte par un pseudo-element, jamais par une balise : il est decoratif,
+   il n a pas de texte de remplacement, donc il ne doit pas etre annonce par un lecteur
+   d ecran. Une balise img aurait besoin d un alt, et une image decorative avec un alt
+   fait parler la page pour rien. Le contenu de la carte est pose au dessus du filigrane. */
+.illustration {
+    max-width: 220px;
+    height: auto;
+}
+
+.hero .illustration {
+    float: right;
+    margin: 0 0 1rem 1.25rem;
+}
+
+.card.watermark {
+    position: relative;
+    padding-bottom: 3.5rem;
+}
+
+.card.watermark::before {
+    content: '';
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    width: 90px;
+    height: 90px;
+    background-image: url('img/key.png');
+    background-repeat: no-repeat;
+    background-position: right bottom;
+    background-size: contain;
+    opacity: var(--watermark);
+    pointer-events: none;
+}
+
+.card.watermark > * {
+    position: relative;
+    z-index: 1;
+}
+
+@media (max-width: 560px) {
+    /* Le filigrane ne flotte pas sur un ecran etroit : il passerait sur le texte. */
+    .hero .illustration {
+        float: none;
+        display: block;
+        margin: 0 0 1rem;
+    }
+
+    .card.watermark::before {
+        width: 60px;
+        height: 60px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none;
+    }
 }

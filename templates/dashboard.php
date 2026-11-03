@@ -54,7 +54,10 @@
 
     <h2>Creer un badge</h2>
 
-    <form method="post" action="<?= attr(url('badges')) ?>">
+    <!-- Le filigrane est une regle de la feuille (style-src 'self' interdit le style dans
+         la vue) : il ne peut pas etre pose par la balise, donc la carte le porte par une
+         classe. C est une decoration, le contenu reste lu dans l ordre. -->
+    <form class="card watermark" method="post" action="<?= attr(url('badges')) ?>">
         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
         <label>

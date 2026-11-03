@@ -199,7 +199,7 @@ def run():
     # 3. Assets : ils sont servis par le serveur web. Un 404 de l'app veut dire que le
     # fichier n'est pas trouve par le serveur : il manque dans le document root (ou le
     # document root n'est pas le depot).
-    for name, expected in (("app.css", "text/css"), ("app.js", "javascript")):
+    for name, expected in (("app.css", "text/css"), ("app.js", "javascript"), ("img/key.png", "image/png")):
         status, headers, body = get("/assets/" + name)
         local = os.path.join(ROOT, "public/assets", name)
         ok = status == 200 and expected in headers.get("content-type", "")
@@ -216,6 +216,15 @@ def run():
     status, headers, body = get("/login", anonymous)
 
     check("page charge app.js", status == 200 and answered_by_app(headers) and b"assets/app.js" in body, "%d -> %s" % (status, origin(headers)))
+
+    # L illustration du porte-cle est un asset du depot, servi par le serveur web comme la
+    # feuille et le script : la page d accueil doit la charger, et le fichier doit etre reel
+    # dans le document root. Une reponse de l app sur ce chemin veut dire que le fichier est
+    # absent du serveur, pas qu il est refuse.
+
+    status, headers, body = get("/", anonymous)
+
+    check("page d accueil charge l illustration", status == 200 and answered_by_app(headers) and b"assets/img/key.png" in body, "%d -> %s" % (status, origin(headers)))
 
     # 3b. Sonde : .htaccess est un fichier reel du depot, a la racine du document root.
     # Le serveur doit le refuser par sa propre configuration (403, sans CSP). Une 404 de
