@@ -151,7 +151,10 @@ script a ecrit, pas ce que la cle sait faire, donc la sonde lit la reponse dans 
 ne retient que celle dont la taille annoncee tient dans la trame. Ce qui distingue CTAP2 de CTAP1
 est le drapeau CBOR de la reponse INIT (`0x04`), pas le handshake : les codes d'erreur du transport
 sont les memes pour les deux versions, et la balise recue garde le drapeau d'initialisation
-(`0xBF` pour une erreur, `0x3F` sans le drapeau).
+(`0xBF` pour une erreur, `0x3F` sans le drapeau). Une requete U2F est une APDU (`INS P1 P2 Lc`) :
+envoyer seulement l'INS fait lire une longueur de donnee incorrecte, et la cle repond le mot d'etat
+`6E 00`. La commande `U2F_VERSION` (0x03) repond la chaine `U2F_V2`, ce qui prouve CTAP1 sans rien
+ecrire sur la cle.
 
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web
