@@ -211,6 +211,10 @@ final class AdminController
         $this->app->session->set('user_id', (int) $storedCredential['user_id']);
         $this->app->session->set('webauthn_at', now());
 
+        // La session garde la credential qui l'a confirmee : la supprimer enleve la
+        // confirmation, supprimer une autre cle du meme compte ne la change pas.
+        $this->app->session->set('webauthn_credential', (string) $storedCredential['credential_id']);
+
         $this->app->users->audit((int) $storedCredential['user_id'], 'webauthn_assert', $verified['credential_id']);
 
         return Response::json(['ok' => true, 'redirect' => $this->app->url('admin')]);

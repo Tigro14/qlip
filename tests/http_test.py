@@ -433,6 +433,7 @@ def run():
     status, data = post_json("/webauthn/register", dict(csrf=csrf, **yubikey.register(b64url_decode(ceremony["challenge"]))))
 
     check("enregistrement none", status == 201, data.get("error") or data.get("credential", {}).get("credential_id", ""))
+    admin_credential = data.get("credential", {}).get("id")
 
     # Packed en auto-attestation : la cle de la credential signe les donnees.
     packed = FakeAuthenticator(b"claie-packed")
@@ -547,6 +548,7 @@ def run():
 
     check("enrolement d une cle U2F", status == 201, data.get("error", ""))
     check("politique stockee par la credential", data.get("credential", {}).get("policy") == "discouraged", json.dumps(data.get("credential", {})))
+    two_credential = data.get("credential", {}).get("id")
 
     status, headers, _ = post("/logout", {"csrf": two_csrf}, two)
 
@@ -644,6 +646,97 @@ def run():
     status, _, _ = get("/admin", admin)
 
     check("administration ouverte par mot de passe + possession", status == 200, str(status))
+
+    # 10c. Oublier la cle 2FA. POST seulement, jeton CSRF, confirmation explicite, mot de passe
+    # du compte, et controle d appartenance. Supprimer la cle qui confirmait la session la rend
+    # de nouveau non confirmee : la page d administration redemande une assertion.
+    status, _, _ = raw(session, "GET", "/credentials/%s/delete" % two_credential)
+
+    check("GET sur la route oublier la cle", status == 405, str(status))
+
+    status, data = post_json(
+        "/credentials/%s/delete" % two_credential,
+        {"csrf": "mauvais-jeton", "confirm": "1", "password": "un-mot-de-passe-long"},
+    )
+
+    check("oublier la cle refuse sans jeton", status == 400, data.get("error", ""))
+
+    status, data = post_json(
+        "/credentials/%s/delete" % two_credential,
+        {"csrf": csrf, "confirm": "0", "password": "un-mot-de-passe-long"},
+    )
+
+    check("oublier la cle refuse sans confirmation", status == 400, data.get("error", ""))
+
+    status, data = post_json("/credentials/%s/delete" % two_credential, {"csrf": csrf, "confirm": "1"})
+
+    check("oublier la cle refuse sans mot de passe", status == 401, data.get("error", ""))
+
+    status, data = post_json(
+        "/credentials/%s/delete" % two_credential,
+        {"csrf": csrf, "confirm": "1", "password": "pas-le-bon-mot-de-passe"},
+    )
+
+    check("oublier la cle refuse avec un mauvais mot de passe", status == 401, data.get("error", ""))
+
+    # La session courante est un compte non administrateur : elle ne peut pas supprimer la cle
+    # d un autre compte, meme avec son propre mot de passe.
+    status, data = post_json(
+        "/credentials/%s/delete" % two_credential,
+        {"csrf": csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+    )
+
+    check("oublier la cle d un autre compte", status == 403, data.get("error", ""))
+
+    # Le tableau de bord du proprietaire presente le formulaire sous sa liste de credentials.
+    status, _, body = get("/dashboard", two)
+
+    check("formulaire oublier la cle sous la liste", ("/credentials/%s/delete" % two_credential).encode() in body, str(status))
+
+    status, _, body = get("/admin", admin)
+    admin_csrf = csrf_of(body)
+
+    check("administration encore ouverte avant la suppression", status == 200 and b"Administration" in body, str(status))
+
+    # L administrateur peut supprimer ce qu il peut lire : la cle d un autre compte.
+    status, data = post_json(
+        "/credentials/%s/delete" % two_credential,
+        {"csrf": admin_csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+        admin,
+    )
+
+    check("administrateur supprime la cle d un autre compte", status == 200 and data.get("deleted") is True, json.dumps(data))
+
+    # La cle qui confirmait la session de l administrateur : la supprimer retire la confirmation,
+    # et la page d administration redemande une assertion.
+    status, data = post_json(
+        "/credentials/%s/delete" % admin_credential,
+        {"csrf": admin_csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+        admin,
+    )
+
+    check("cle de l administrateur supprimee", status == 200 and data.get("deleted") is True, json.dumps(data))
+
+    status, headers, _ = get("/admin", admin)
+
+    check("administration fermee apres la suppression de la cle confirmee",
+          status == 302 and "/admin/yubikey" in headers.get("location", ""),
+          headers.get("location", ""))
+
+    # Le compte sans credential revient au seul mot de passe : il n est plus mis en attente.
+    status, _, body = get("/dashboard", two)
+    two_csrf = csrf_of(body)
+
+    status, headers, _ = post("/logout", {"csrf": two_csrf}, two)
+    status, headers, _ = post(
+        "/login",
+        {"csrf": csrf_of(get("/login", two)[2]), "email": "2fa@qlip.test", "password": "un-mot-de-passe-long"},
+        two,
+    )
+
+    check("cle supprimee : le mot de passe suffit de nouveau",
+          status == 302 and "/login/2fa" not in headers.get("location", ""),
+          headers.get("location", ""))
 
     # 11. Suppression : elle est definitive, donc jeton CSRF + confirmation explicite, et le
     # mot de passe pour le compte. Une autre session (un autre compte) ne peut rien detruire,

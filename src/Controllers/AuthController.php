@@ -331,6 +331,10 @@ final class AuthController
 
         $this->app->session->set('webauthn_at', now());
 
+        // La session garde la credential qui l'a confirmee : la supprimer enleve la
+        // confirmation, supprimer une autre cle du meme compte ne la change pas.
+        $this->app->session->set('webauthn_credential', (string) $credential['credential_id']);
+
         $this->app->users->audit((int) $pending['id'], 'webauthn_assert', $verified['credential_id']);
 
         $this->acceptSession($pending, 'login_2fa');
@@ -399,6 +403,75 @@ final class AuthController
         $this->app->flash('Compte ' . $counts['email'] . ' supprime (' . $counts['pages'] . ' pages, ' . $counts['badges'] . ' badges).');
 
         return Response::redirect($this->app->url('login'));
+    }
+
+    /**
+     * Oublier la cle 2FA : POST seulement, avec le jeton CSRF, une confirmation explicite et
+     * le mot de passe du compte. Enlever la cle remet le compte au seul mot de passe, donc la
+     * session perd la trace de la possession que cette cle avait apportee. Le controle
+     * d'appartenance est ici : le proprietaire, ou un administrateur.
+     */
+    public function deleteCredential(Request $request): Response
+    {
+        $user = $this->app->currentUser();
+
+        if ($user === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Connexion requise.'], 401)
+                : Response::html('Connexion requise.', 401);
+        }
+
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Jeton CSRF invalide.'], 400)
+                : Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        if ($request->input('confirm') !== '1') {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Confirmation requise.'], 400)
+                : Response::html('Confirmation requise.', 400);
+        }
+
+        $password = (string) $request->input('password');
+
+        if ($password === '' || !password_verify($password, (string) $user['password_hash'])) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Mot de passe incorrect.'], 401)
+                : Response::html('Mot de passe incorrect.', 401);
+        }
+
+        $credential = $this->app->credentials->find((int) $request->params['id']);
+
+        if ($credential === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Credential introuvable.'], 404)
+                : Response::html('Credential introuvable.', 404);
+        }
+
+        if ((int) $credential['user_id'] !== (int) $user['id'] && (int) $user['is_admin'] !== 1) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Credential d un autre compte.'], 403)
+                : Response::html('Credential d un autre compte.', 403);
+        }
+
+        $this->app->credentials->delete((int) $user['id'], (int) $credential['id']);
+
+        // La confirmation de la session venait de cette credential : la supprimer laisse la
+        // session sans preuve de possession, donc la page d'administration redemande une
+        // assertion. Une autre cle du meme compte ne change pas la confirmation.
+        if ((string) $this->app->session->get('webauthn_credential', '') === (string) $credential['credential_id']) {
+            $this->app->session->remove('webauthn_at');
+            $this->app->session->remove('webauthn_credential');
+        }
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'id' => (int) $credential['id']]);
+        }
+
+        $this->app->flash('Credential ' . $credential['credential_id'] . ' supprimee. Le compte se reconnecte avec le seul mot de passe.');
+
+        return Response::redirect($this->app->url('dashboard'));
     }
 
     private function lockedUntil(): int

@@ -8,7 +8,7 @@ Application PHP + SQLite locale : mini pages de contact, QR codes, badges porte-
 imprimables en STL/3MF, page d'administration protegee par YubiKey (WebAuthn), inscription
 avec email verifie, reinitialisation de mot de passe par lien envoye par email (usage unique,
 24 h), 10 creations de badge par jour et par compte, suppression definitive
-(page, badge, compte) avec confirmation et trace dans `audit_log`.
+(page, badge, compte, cle 2FA) avec confirmation et trace dans `audit_log`.
 
 ## Contraintes qui ne changent pas
 
@@ -71,6 +71,11 @@ fichier, dans le namespace `Qlip\...`.
 - suppression definitive : POST seulement, jeton CSRF, confirmation explicite, mot de passe
   pour le compte, et controle d appartenance (proprietaire ou administrateur). Une ligne
   d audit est ecrite pour chaque suppression ;
+- supprimer la cle 2FA est une suppression definitive : le mot de passe est demande, parce que
+  sans lui une session laissee ouverte permettrait d enlever le second facteur et de rendre le
+  compte accessible par le seul mot de passe. La session garde la credential qui l a confirmee
+  (`webauthn_credential` en session) : supprimer cette cle emporte `webauthn_at`, supprimer une
+  autre cle du meme compte ne la change pas ;
 - `/admin` exige un compte marque administrateur et une session confirmee par une assertion
   (`webauthn_at` en session) ;
 - controles WebAuthn : challenge, origine, hash du RP ID, drapeaux UP/AT, compteur
@@ -222,7 +227,8 @@ utilise le MTA local.
   (le lien de verification est usage unique lui aussi). Ce n'est pas une faille a corriger.
 - Quota : il porte sur les evenements de creation dans `audit_log` (`action = 'badge'`),
   pas sur les lignes qui restent. Les actions de suppression ont des noms distincts
-  (`badge_supprime`, `page_supprimee`, `compte_supprime`) pour ne pas polluer le comptage.
+  (`badge_supprime`, `page_supprimee`, `compte_supprime`, `credential_supprimee`) pour ne pas
+  polluer le comptage.
 - Trace de suppression du compte : ecrite apres le DELETE, avec l'adresse dans le detail,
   parce que `audit_log.user_id` devient NULL (`ON DELETE SET NULL`).
 - `proc_open` : les descripteurs sont lus du cote de l'enfant. Le stdin de l'enfant est

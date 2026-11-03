@@ -140,6 +140,36 @@ final class Credentials
         );
     }
 
+    /**
+     * Suppression definitive d'une credential. Le controle d'appartenance est fait par le
+     * controleur : ici on suppose qu'il a ete fait. Le detail est pris avant le DELETE, parce
+     * qu'apres la ligne n'existe plus.
+     */
+    public function delete(int $userId, int $credentialId): void
+    {
+        $credential = $this->find($credentialId);
+
+        if ($credential === null) {
+            return;
+        }
+
+        $this->db->exec('DELETE FROM webauthn_credentials WHERE id = :id', [':id' => $credentialId]);
+
+        $this->audit($userId, 'credential_supprimee', 'credential ' . $credential['credential_id'] . ' supprimee');
+    }
+
+    /**
+     * Le nom de l'action est distinct de ceux des badges : le quota du jour compte les
+     * creations, donc une suppression ne doit pas entrer dans le meme comptage.
+     */
+    private function audit(int $userId, string $action, string $detail): void
+    {
+        $this->db->exec(
+            'INSERT INTO audit_log (user_id, action, detail, created_at) VALUES (:user_id, :action, :detail, :created_at)',
+            [':user_id' => $userId, ':action' => $action, ':detail' => $detail, ':created_at' => now()]
+        );
+    }
+
     /** @return array<string, mixed>|null */
     public function algorithm(array $credential): ?array
     {

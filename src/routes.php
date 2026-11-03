@@ -53,6 +53,7 @@ function qlip_routes(App $app): Router
     $router->post('/badges/{id}/delete', fn (Request $request): Response => $badges->delete($request));
     $router->get('/badges/{id}/{format}', fn (Request $request): Response => $badges->download($request));
 
+    $router->post('/credentials/{id}/delete', fn (Request $request): Response => $auth->deleteCredential($request));
     $router->post('/account/delete', fn (Request $request): Response => $auth->deleteAccount($request));
 
     $router->get('/admin', fn (Request $request): Response => $admin->dashboard($request));

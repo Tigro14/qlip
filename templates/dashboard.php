@@ -140,9 +140,25 @@
                 <?php foreach ($credentials as $credential): ?>
                     <li><code><?= e($credential['credential_id']) ?></code> &mdash;
                         politique <?= e($credential['policy'] ?? '') ?> &mdash;
-                        compteur <?= (int) $credential['sign_count'] ?></li>
+                        compteur <?= (int) $credential['sign_count'] ?>
+
+                        <form method="post" action="<?= attr(url('credentials/' . $credential['id'] . '/delete')) ?>" class="inline">
+                            <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                            <label>Mot de passe<input type="password" name="password" required></label>
+                            <label><input type="checkbox" name="confirm" value="1" required> Confirmer</label>
+                            <button type="submit">Oublier cette cle</button>
+                        </form>
+                    </li>
                 <?php endforeach; ?>
             </ul>
+
+            <p class="note">
+                Supprimer la cle est definitif : le compte se reconnecte avec le seul mot de passe.
+                Elle est protegee par le mot de passe du compte parce que la cle ne peut plus prouver
+                la possession au moment ou on l'enleve, et la session en cours perd la confirmation
+                que cette cle lui avait apportee.
+            </p>
         <?php else: ?>
             <p class="note">Aucune credential : la connexion se fait avec le seul mot de passe.</p>
         <?php endif; ?>

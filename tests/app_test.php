@@ -928,6 +928,7 @@ if ($u2f === null) {
     check('second facteur accepte', $response->status() === 200 && ($data['ok'] ?? false) === true, $data['error'] ?? $response->body());
     check('session confirmee par le second facteur', (int) $app->session->get('user_id', 0) === (int) $twoUser['id'] && $app->session->get('pending_user_id') === null);
     check('trace de l assertion pour la page d administration', $app->session->get('webauthn_at') !== null);
+    check('la session garde la credential qui l a confirmee', (string) $app->session->get('webauthn_credential', '') === (string) $u2f['register']['credential_id'], json_encode($app->session->data()));
 
     $actions = [];
 
@@ -948,6 +949,117 @@ if ($u2f === null) {
         'webauthn_assert_failed' => 8,
         'webauthn_register' => 1,
     ], json_encode($actions));
+
+    // 19. Oublier la cle 2FA. Suppression definitive : jeton CSRF, confirmation explicite, mot
+    // de passe du compte et controle d appartenance. Le mot de passe est demande parce que la
+    // cle ne peut plus prouver la possession au moment ou on l enleve.
+    $credentialId = (int) $u2fRow['id'];
+
+    // Session confirmee par cette cle : la suppression doit emporter la confirmation.
+    $app->session = new Session([
+        'token' => random_token(16),
+        'user_id' => (int) $twoUser['id'],
+        'webauthn_at' => now(),
+        'webauthn_credential' => $u2f['register']['credential_id'],
+    ], true);
+
+    $delete = static function (array $body) use ($send, $credentialId): Response {
+        return $send('POST', '/credentials/' . $credentialId . '/delete', $body);
+    };
+
+    check('suppression de la cle refusee sans jeton', $delete(['csrf' => 'mauvais-jeton', 'confirm' => '1', 'password' => 'un-mot-de-passe-long'])->status() === 400);
+    check('suppression de la cle refusee sans confirmation', $delete(['confirm' => '0', 'password' => 'un-mot-de-passe-long'])->status() === 400);
+    check('suppression de la cle refusee sans mot de passe', $delete(['confirm' => '1'])->status() === 401);
+    check('suppression de la cle refusee avec un mauvais mot de passe', $delete(['confirm' => '1', 'password' => 'pas-le-bon-mot-de-passe'])->status() === 401);
+    check('cle encore la apres un refus', $app->credentials->find($credentialId) !== null);
+
+    $app->session = new Session(['token' => random_token(16), 'user_id' => (int) $otherUser['id']], true);
+
+    check('suppression de la cle d un autre compte', $delete(['confirm' => '1', 'password' => 'un-mot-de-passe-long'])->status() === 403);
+    check('cle d un autre compte toujours la', $app->credentials->find($credentialId) !== null);
+
+    // Le formulaire est sur la page du proprietaire, pas sur celle d un autre compte.
+    $response = $send('GET', '/dashboard');
+
+    check('pas de formulaire pour une cle d un autre compte', !str_contains($response->body(), 'credentials/' . $credentialId . '/delete'));
+
+    $app->session = new Session([
+        'token' => random_token(16),
+        'user_id' => (int) $twoUser['id'],
+        'webauthn_at' => now(),
+        'webauthn_credential' => $u2f['register']['credential_id'],
+    ], true);
+
+    $response = $send('GET', '/dashboard');
+
+    check('formulaire oublier la cle sous la liste', str_contains($response->body(), 'credentials/' . $credentialId . '/delete'));
+
+    // Une autre cle du meme compte ne change pas la confirmation : elle vient de la credential
+    // qui a fait l assertion. La seconde est prise dans un autre fixture, donc son ID de
+    // credential est different.
+    $otherFixture = $fixtures['fixtures'][0];
+
+    $second = $app->credentials->register(
+        (int) $twoUser['id'],
+        $otherFixture['register']['attestation'],
+        $otherFixture['register']['client_data'],
+        $fixtures['challenge'],
+        Policy::DISCOURAGED
+    );
+
+    $response = $send('POST', '/credentials/' . (int) $second['id'] . '/delete', ['confirm' => '1', 'password' => 'un-mot-de-passe-long']);
+
+    check('autre cle du meme compte supprimee', $response->status() === 200, $response->body());
+    check('la confirmation vient de la cle qui a fait l assertion', $app->session->get('webauthn_at') !== null);
+
+    // Le nom de l action doit rester distinct : le quota du jour compte les creations de badge
+    // dans audit_log, une suppression ne doit pas entrer dans ce comptage.
+    $usedBefore = $app->badges->usedToday((int) $twoUser['id']);
+
+    $response = $delete(['confirm' => '1', 'password' => 'un-mot-de-passe-long']);
+
+    check('cle supprimee', $response->status() === 200, $response->body());
+    check('cle disparue', $app->credentials->find($credentialId) === null);
+    check('suppression de la cle ne rembourse pas le quota', $app->badges->usedToday((int) $twoUser['id']) === $usedBefore, (string) $usedBefore);
+
+    $trace = $app->db->one(
+        "SELECT user_id, action, detail FROM audit_log WHERE action = 'credential_supprimee' ORDER BY id DESC LIMIT 1"
+    );
+
+    check(
+        'trace de suppression de la cle',
+        $trace !== null
+            && (int) $trace['user_id'] === (int) $twoUser['id']
+            && str_contains((string) $trace['detail'], (string) $u2f['register']['credential_id']),
+        json_encode($trace)
+    );
+
+    // La session n a plus de preuve de possession derriere elle : la cle qui la confirmait est
+    // partie, donc la page d administration redemande une assertion.
+    check('confirmation de la session emportee par la cle', $app->session->get('webauthn_at') === null && $app->session->get('webauthn_credential') === null, json_encode($app->session->data()));
+
+    // L administrateur peut supprimer ce qu il peut lire : la cle d un autre compte. La cle
+    // est enregistree par le service, avec les memes octets de la fixture.
+    $foreign = $app->credentials->register(
+        (int) $otherUser['id'],
+        $u2f['register']['attestation'],
+        $u2f['register']['client_data'],
+        $fixtures['challenge'],
+        Policy::DISCOURAGED
+    );
+
+    $app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+    check('administrateur supprime la cle d un autre compte', $send('POST', '/credentials/' . $foreign['id'] . '/delete', ['confirm' => '1', 'password' => 'mot-de-passe-long'])->status() === 200);
+    check('cle d un autre compte disparue', $app->credentials->find((int) $foreign['id']) === null);
+
+    // Le compte est de nouveau un compte au seul mot de passe : il n est plus mis en attente.
+    $app->session = new Session(['token' => random_token(16)], true);
+
+    $response = $send('POST', '/login', ['email' => '2fa@qlip.test', 'password' => 'un-mot-de-passe-long']);
+
+    check('connexion au seul mot de passe apres la suppression', $response->status() === 302 && !(str_contains((string) $response->header('Location'), '2fa')), (string) $response->header('Location'));
+    check('aucune action de suppression dans le comptage des badges', $app->badges->usedToday((int) $twoUser['id']) === 0);
 }
 
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;

@@ -200,7 +200,9 @@ Quand le compte a une credential, le mot de passe ne suffit plus :
    une ceremony refusee servirait a tester les credentials sans limite.
 3. L'assertion acceptee confirme la session (`webauthn_at`) et la marque `login_2fa` dans
    `audit_log` ; l'evenement du mot de passe est `login_pending`, donc le journal distingue les
-   deux etapes par compte.
+   deux etapes par compte. La session garde la credential qui a fait la confirmation, donc
+   supprimer cette cle retire la confirmation (voir Suppressions) : la page d administration
+   redemande une assertion.
 
 Une cle U2F ne stocke pas la credential en resident : la liste `allowCredentials` vient du
 serveur, la cle ne peut pas retrouver son identifiant seule. Elle n'a pas d'AAGUID non plus :
@@ -311,18 +313,27 @@ bicolores), signalees mais pas considerees comme des erreurs.
 ## Suppressions
 
 Le tableau de bord permet de supprimer une page (et les badges qui la portent), un badge,
-ou le compte. Suppression definitive : ce qui est detruit ne revient pas.
+une cle de second facteur, ou le compte. Suppression definitive : ce qui est detruit ne revient
+pas.
 
 - POST seulement : un GET ne doit pas detruire, un lien ne suffit pas ;
 - jeton CSRF obligatoire, et une confirmation explicite (case a cocher) ;
 - le mot de passe est demande pour le compte, parce qu une session laissee ouverte sur un
   poste partage ne doit pas permettre de detruire un compte ;
+- le mot de passe est demande aussi pour supprimer la cle 2FA : sans lui, une session laissee
+  ouverte permettrait d enlever le second facteur et de laisser le compte accessible par le seul
+  mot de passe ;
 - le proprietaire supprime ce qui est a lui, l administrateur peut supprimer ce qu il peut
   lire ;
 - une ligne est ecrite dans `audit_log` (`page_supprimee`, `badge_supprime`,
-  `compte_supprime`) avec qui et quoi. Pour un compte, la ligne est ecrite apres le DELETE
-  et garde l adresse dans le detail : `user_id` devient NULL (`ON DELETE SET NULL`), donc la
-  trace ne peut pas s appuyer sur le compte.
+  `compte_supprime`, `credential_supprimee`) avec qui et quoi. Pour un compte, la ligne est
+  ecrite apres le DELETE et garde l adresse dans le detail : `user_id` devient NULL
+  (`ON DELETE SET NULL`), donc la trace ne peut pas s appuyer sur le compte.
+
+Supprimer la cle 2FA remet le compte au seul mot de passe, et emporte la confirmation de la
+session que cette cle avait apportee (`webauthn_at`) : la page d administration redemande une
+assertion. Supprimer une autre cle du meme compte ne change pas la confirmation, la session
+garde la credential qui l a faite.
 
 Le quota de 10 creations par jour porte sur les evenements de creation (`action = 'badge'`
 dans `audit_log`), pas sur les lignes qui restent : supprimer un badge ne rembourse pas le

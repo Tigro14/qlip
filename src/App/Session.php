@@ -120,6 +120,12 @@ final class Session
         $this->data[$key] = $value;
     }
 
+    public function remove(string $key): void
+    {
+        $this->start();
+        unset($this->data[$key]);
+    }
+
     public function destroy(): void
     {
         $this->data = [];
