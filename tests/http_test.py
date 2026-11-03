@@ -203,7 +203,7 @@ class FakeAuthenticator:
 
         return {
             "credential_id": wf.b64url(self.credential_id),
-            "attestation": wf.b64url(wf.cbor({"fmt": fmt, "attAuthData": auth_data, "attStmt": statement})),
+            "attestation": wf.b64url(wf.cbor({"fmt": fmt, "authData": auth_data, "attStmt": statement})),
             "client_data": wf.b64url(client_data),
         }
 
@@ -355,6 +355,22 @@ def run():
 
     check("bouton d enrolement pour un admin", b'data-action="register"' in body)
     check("page YubiKey charge app.js", b"assets/app.js" in body, "script externe, jamais inline")
+
+    # Le script n est pas execute par la suite : il est relu pour ce qui ne peut pas etre
+    # verifie ici, un nom de methode de l API WebAuthn et les appels de fonctions du fichier.
+    script = open(os.path.join(ROOT, "public", "assets", "app.js"), encoding="utf-8").read()
+    source = re.sub(r"/\*.*?\*/", " ", re.sub(r"//[^\n]*", "", script), flags=re.S)
+    defined = set(re.findall(r"function\s+([A-Za-z0-9_$]+)\s*\(", source)) | set(re.findall(r"const\s+([A-Za-z0-9_$]+)\s*=", source))
+    known = {"Error", "JSON", "Uint8Array", "atob", "btoa", "fetch"}
+    keywords = {"if", "for", "while", "switch", "return", "catch", "typeof", "new", "throw", "function", "of", "in"}
+    called = set(re.findall(r"(?<![\w.$\])}])([A-Za-z0-9_$]+)\s*\(", source)) - keywords
+
+    check("app.js : objet d attestation lu par getAttestation()", "getAttestation()" in script, "la methode de l API, pas un helper invente")
+    check(
+        "app.js : aucune fonction appelee sans etre definie",
+        called <= defined | known,
+        ", ".join(sorted(called - defined - known)) or "%d appels" % len(called),
+    )
 
     csrf = csrf_of(body)
 

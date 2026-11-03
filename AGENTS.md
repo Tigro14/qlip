@@ -134,7 +134,9 @@ moins un check echoue. Ajouter un check quand on corrige un bug.
 Contre-verifications independantes : `tests/qr_compare.py` (reference Python `qrcode` +
 decodage `zxing-cpp`), `tests/stl_check.py` (maillages et .3MF valides par un lecteur
 tiers). Ne jamais aligner une reference sur l'implementation pour faire passer un test :
-une divergence est un bug a comprendre.
+une divergence est un bug a comprendre. Le script du navigateur (`public/assets/app.js`)
+n'est pas execute par la suite : `tests/http_test.py` le relit pour les noms de methodes de
+l'API WebAuthn et les fonctions appelees sans etre definies.
 
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web
@@ -157,7 +159,9 @@ utilise le MTA local.
 - WebAuthn : AuthData = 32 octets de hash du RP ID + drapeaux + compteur, bloc AT a
   l'offset 37 ; labels COSE negatifs ; signature raw `r||s` convertie en DER a la main ;
   tampons echanges en base64url. Formats d'attestation acceptes : `none` et `packed`
-  (auto-attestation), la racine est optionnelle.
+  (auto-attestation), la racine est optionnelle. Cles du map CBOR d'attestation : `fmt`,
+  `attStmt`, `authData` ; `attAuthData` n'existe pas dans la spec, donc un harnais qui
+  l'ecrit ne peut pas voir l'erreur devant un vrai navigateur.
 - `session_status()` peut mentir avec un binaire PHP statique : la logique s'appuie sur
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et

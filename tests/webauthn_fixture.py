@@ -137,9 +137,12 @@ def fixture(name, key, cose, alg, credential_id):
     create_client = client_data("webauthn.create", ORIGIN)
     message = hashlib.sha256(data).digest() + hashlib.sha256(create_client).digest()
 
+    # Cles imposees par la spec (fmt, attStmt, authData) : la reference ne doit pas etre
+    # alignee sur l'implementation, sinon un nom de cle errone passe les tests et echoue
+    # devant un vrai navigateur.
     attestation = cbor({
         "fmt": "none",
-        "attAuthData": data,
+        "authData": data,
         "attStmt": {},
     })
 

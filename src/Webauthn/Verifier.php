@@ -39,7 +39,10 @@ final class Verifier
             throw new \InvalidArgumentException('Objet d attestation invalide.');
         }
 
-        $authData = (string) ($object['attAuthData'] ?? '');
+        // Les cles du map CBOR sont imposees par la spec : fmt, attStmt, authData.
+        // Un navigateur reel n emet jamais attAuthData, donc lire une autre cle rend
+        // l enregistrement impossible en production.
+        $authData = (string) ($object['authData'] ?? '');
         $statement = is_array($object['attStmt'] ?? null) ? $object['attStmt'] : [];
         $format = (string) ($object['fmt'] ?? 'none');
         $clientDataRaw = base64url_decode($clientDataB64url);

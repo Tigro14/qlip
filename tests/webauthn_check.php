@@ -32,6 +32,16 @@ function check(string $label, bool $ok, string $detail = ''): void
 foreach ($json['fixtures'] as $fixture) {
     echo $fixture['name'], PHP_EOL;
 
+    // Le nom des cles du map CBOR vient de la spec : fmt, attStmt, authData. Un navigateur
+    // reel n emet pas attAuthData. Le harnais doit ecrire la cle de la spec, pas celle de
+    // l implementation, sinon l erreur ne se voit que sur l instance deployee.
+    $object = Cbor::decode(base64url_decode($fixture['register']['attestation']));
+    check(
+        'cle authData de la spec',
+        is_array($object) && isset($object['authData']),
+        implode(', ', array_keys(is_array($object) ? $object : []))
+    );
+
     // Enregistrement
     try {
         $registered = $verifier->verifyRegistration($fixture['register']['attestation'], $fixture['register']['client_data'], $json['challenge']);

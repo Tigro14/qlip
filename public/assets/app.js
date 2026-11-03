@@ -105,7 +105,9 @@ async function registerCredential(element) {
         body: JSON.stringify({
             csrf: csrf,
             credential_id: toBase64Url(credential.rawId),
-            attestation: toBase64Url(credential.response.get(attestationBytes(credential.response)), true),
+            // getAttestation() renvoie l objet CBOR brut (fmt, attStmt, authData) tel que le
+            // navigateur l a recu de l authenticateur. Il n y a pas de methode attestationBytes.
+            attestation: toBase64Url(credential.response.getAttestation()),
             client_data: toBase64Url(credential.response.clientDataJSON),
         }),
     });
