@@ -57,12 +57,17 @@ function report(element, message, level) {
 async function registerCredential(element) {
     const { csrf, base } = params(element);
     const ceremony = await getCeremony(element);
+
+    // Le champ id de PublicKeyCredentialUserEntity est un tampon, pas une chaine : l'ID du
+    // compte arrive en base64url et se decode ici. Passe tel quel en JSON, il reste une
+    // chaine et le navigateur refuse la ceremony.
     const user = element.dataset.user ? JSON.parse(element.dataset.user) : null;
+    const entity = user ? { id: fromBase64Url(user.id), name: user.name, displayName: user.displayName } : null;
 
     const credential = await navigator.credentials.create({
         publicKey: {
             rp: { id: ceremony.rpId, name: 'Qlip' },
-            user: user || { id: new Uint8Array(16), name: 'qlip', displayName: 'qlip' },
+            user: entity || { id: new Uint8Array(16), name: 'qlip', displayName: 'qlip' },
             challenge: fromBase64Url(ceremony.challenge),
             pubKeyCredParams: [
                 { type: 'public-key', alg: -7 },   // ES256

@@ -448,6 +448,22 @@ if (!is_array($fixtures)) {
     // pas le script, les boutons ne font rien et l enrolement est impossible.
     check('app.js charge par la page', str_contains($response->body(), 'src="http://qlip.test/assets/app.js"'), $response->body());
 
+    // L identite transmise au navigateur est un tampon : le champ id de
+    // PublicKeyCredentialUserEntity n est pas une chaine. Passe tel quel en JSON il reste une
+    // chaine, et credentials.create refuse la ceremonie. Il est donc transmis en base64url,
+    // comme le reste des tampons echanges avec le navigateur.
+    preg_match('/data-user="([^"]+)"/', $response->body(), $match);
+    $raw = html_entity_decode((string) ($match[1] ?? ''), ENT_QUOTES, 'UTF-8');
+    $entity = json_decode($raw, true);
+
+    try {
+        $handle = base64url_decode((string) ($entity['id'] ?? ''));
+    } catch (\Throwable $error) {
+        $handle = '';
+    }
+
+    check('id d utilisateur transmis en base64url', $handle === (string) $admin['id'], $raw);
+
     $response = $send('GET', '/admin');
 
     check('admin bloque avant la premiere assertion', str_contains($response->header('Location') ?? '', '/admin/yubikey'));
