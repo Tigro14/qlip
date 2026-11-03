@@ -17,6 +17,7 @@ Le CBOR est lu par un lecteur ecrit ici, pas par celui du projet : une lecture a
 l'implementation ne pourrait pas voir une erreur.
 
   python3 tests/assert_base.py /tmp/opencode/assert.json
+  python3 tests/assert_base.py --self-test
 
 Le JSON attendu (valeurs en base64url, comme elles arrivent au serveur) :
 
@@ -28,9 +29,9 @@ Le JSON attendu (valeurs en base64url, comme elles arrivent au serveur) :
     "cose": "..."
   }
 
-La sonde peut aussi etre lancee contre un cas connu : le harnais produit une signature faite sur
-la base WebAuthn, donc la sonde doit nommer cette base. C est le test de la sonde elle-meme :
-une sonde qui accepte toutes les bases ne mesure rien.
+La sonde est testee contre un cas connu (--self-test) : elle fabrique une assertion faite sur la
+base WebAuthn avec une cle qu elle genere, donc elle doit nommer cette base et refuser les autres.
+C est le test de la sonde elle-meme : une sonde qui accepte toutes les bases ne mesure rien.
 """
 
 import base64
@@ -45,10 +46,13 @@ from cryptography.hazmat.primitives.asymmetric import ec
 failures = 0
 
 
-def check(label, ok, detail=''):
+def check(label, ok, detail='', count=True):
     global failures
 
-    if not ok:
+    # Une base qui ne verifie pas n est pas un probleme : c est la mesure. Seul le jugement
+    # compte (la conclusion de la mesure, ou le cas connu du self-test), sinon la sonde serait
+    # en echec sur toute mesure valide.
+    if count and not ok:
         failures += 1
 
     print('  %s   %s%s' % ('OK' if ok else 'KO', label, ' : ' + detail if detail else ''))
@@ -160,12 +164,87 @@ def bases(credential_id, auth_data, client_data, x, y):
     }
 
 
+def measure(credential_id, auth_data, client_data, signature, x, y):
+    """Une signature, toutes les bases candidates. Renvoie les bases qui verifient.
+
+    La forme n est pas ce qui est mesure ici : la signature est remise telle quelle, et la
+    forme brute est convertie par la sonde elle meme pour pouvoir comparer les bases.
+    """
+    der = signature if len(signature) != 64 else der_from_raw(signature, 32)
+    public = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), b'\x04' + x + y)
+
+    print('cle COSE (reference Python) : x=%s' % x.hex())
+    print('                            y=%s' % y.hex())
+    print('counter lu dans authData     : %d' % int.from_bytes(auth_data[33:37], 'big'))
+    print('forme recue                  : %d octets (%s)' % (
+        len(signature), 'brute r || s' if len(signature) == 64 else 'DER'))
+    print()
+
+    matched = []
+
+    for label, message in bases(credential_id, auth_data, client_data, x, y).items():
+        try:
+            public.verify(der, message, ec.ECDSA(hashes.SHA256()))
+            check(label, True, count=False)
+            matched.append(label)
+        except Exception as error:
+            check(label, False, str(error)[:60], count=False)
+
+    print()
+
+    return matched
+
+
+def report(matched):
+    if len(matched) == 1:
+        check('base de la cle : %s' % matched[0], True)
+    else:
+        check('la mesure tranche (une seule base)', False, ' ou '.join(matched) if matched else 'aucune')
+
+    print('problemes : %d' % failures)
+    return 1 if failures else 0
+
+
+def self_test():
+    """Cas connu, fabrique par la sonde : une signature faite sur la base WebAuthn.
+
+    Les octets ne viennent pas du harnais : la sonde genere sa propre cle et ecrit AuthData elle
+    meme, donc elle ne peut pas se valider elle-meme. La base nommee doit etre la base WebAuthn,
+    et aucune autre ne doit verifier.
+    """
+    key = ec.generate_private_key(ec.SECP256R1())
+    numbers = key.private_numbers().public_numbers
+    x, y = numbers.x.to_bytes(32, 'big'), numbers.y.to_bytes(32, 'big')
+
+    credential_id = b'claie-de-sonde'
+    auth_data = hashlib.sha256(b'qlip.test').digest() + b'\x01' + (1).to_bytes(4, 'big')
+    client_data = b'{"type":"webauthn.get","challenge":"sonde","origin":"https://qlip.test"}'
+
+    signature = key.sign(
+        hashlib.sha256(auth_data).digest() + hashlib.sha256(client_data).digest(),
+        ec.ECDSA(hashes.SHA256()),
+    )
+
+    matched = measure(credential_id, auth_data, client_data, signature, x, y)
+    known = 'webauthn : hash(authData) || hash(clientDataJSON)'
+
+    check('cas connu : la base WebAuthn est nommee, les autres refusees', matched == [known],
+          ' ou '.join(matched) if matched else 'aucune')
+
+    print('problemes : %d' % failures)
+    return 1 if failures else 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == '--self-test':
+        return self_test()
+
     path = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('QLIP_ASSERT_JSON', '')
 
     if not path or not os.path.isfile(path):
         print('sonde lancee sans octets : copie le corps du POST /webauthn/assert dans un JSON '
-              '(credential_id, auth_data, client_data, signature, cose) puis relance')
+              '(credential_id, auth_data, client_data, signature, cose) puis relance, '
+              'ou lance --self-test pour le cas connu')
         return 1
 
     data = json.load(open(path))
@@ -182,39 +261,7 @@ def main():
         print('cle COSE sans coordonnees : la sonde ne peut pas reconstituer la cle')
         return 1
 
-    x, y = coords
-
-    # La forme n est pas ce qui est mesure ici : la signature est remise telle quelle, et la
-    # forme brute est convertie par la sonde elle meme pour pouvoir comparer les bases.
-    der = signature if len(signature) != 64 else der_from_raw(signature, 32)
-    public = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), b'\x04' + x + y)
-
-    print('cle COSE (reference Python) : x=%s' % x.hex())
-    print('                            y=%s' % y.hex())
-    print('counter lu dans authData     : %d' % int.from_bytes(auth_data[33:37], 'big'))
-    print('forme recue                  : %d octets (%s)' % (
-        len(signature), 'brute r || s' if len(signature) == 64 else 'DER'))
-    print()
-
-    matched = []
-
-    for label, message in bases(credential_id, auth_data, client_data, x, y).items():
-        try:
-            public.verify(der, message, ec.ECDSA(hashes.SHA256()))
-            check(label, True)
-            matched.append(label)
-        except Exception as error:
-            check(label, False, str(error)[:60])
-
-    print()
-
-    if len(matched) == 1:
-        print('base de la cle : %s' % matched[0])
-        print('problemes : 0')
-        return 0
-
-    print('problemes : 1 (aucune base, ou plusieurs : la mesure ne tranche pas)')
-    return 1
+    return report(measure(credential_id, auth_data, client_data, signature, *coords))
 
 
 if __name__ == '__main__':

@@ -132,12 +132,18 @@ foreach ($json['fixtures'] as $fixture) {
         }
     }
 
+    // Le format lu a l'enregistrement est la colonne stockee par credential : il porte la base
+    // de signature de l'assertion. Il est compare a celui que le harnais a ecrit, sinon le
+    // controle de la base ne porterait pas sur ce qui est vraiment stocke.
+    check('format stocke par la credential', $registered['fmt'] === $fixture['fmt'], $registered['fmt']);
+
     $stored = [
         'credential_id' => base64url_decode($fixture['register']['credential_id']),
         'cose' => $fixture['register']['cose'],
         'sign_count' => 0,
         'policy' => $policy,
         'uv_seen' => $fixture['user_verified'],
+        'fmt' => $registered['fmt'],
     ];
 
     // Assertion
@@ -188,6 +194,26 @@ foreach ($json['fixtures'] as $fixture) {
         check('forme de signature malformee refusee', false);
     } catch (Throwable $error) {
         check('forme de signature malformee refusee', true, $error->getMessage());
+    }
+
+    // La base n est pas un choix au moment de verifier : elle vient du format enregistre avec la
+    // credential. Une signature faite sur la base de l autre format doit etre refusee, sinon le
+    // controle ne porterait plus sur ce sur quoi la signature est faite. Le message attendu est
+    // celui de la signature : le compteur de ce cas est plus grand que celui qui est stocke, donc
+    // ce n est pas lui qui refuse.
+    try {
+        $verifier->verifyAssertion(
+            $fixture['other_base']['auth_data'],
+            $fixture['other_base']['client_data'],
+            $fixture['other_base']['signature'],
+            array_merge($stored, ['sign_count' => 1]),
+            $json['challenge'],
+            $policy
+        );
+
+        check('autre base de signature refusee', false);
+    } catch (Throwable $error) {
+        check('autre base de signature refusee', $error->getMessage() === 'Signature invalide.', $error->getMessage());
     }
 
     // Rejoue : le meme compteur ne doit pas etre accepte deux fois.

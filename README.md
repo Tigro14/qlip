@@ -231,6 +231,13 @@ WebAuthn `hash(authData) + hash(clientData)` : le premier octet est un contre-si
 certificat il n'y a rien a verifier, ce format n'a pas d'auto-attestation. Le harnais
 verifie la base avec le cas `bad_base` : une signature calculee sur l'autre base est refusee.
 
+Le format enregistre avec la credential porte la base de l'assertion. Pour une credential
+fido-u2f, la base est `authData` sans hash suivi du hash des donnees client (le contre-signal y
+est l'octet de presence utilisateur), et pour une credential enregistree sans attestation elle
+reste `hash(authData) + hash(clientDataJSON)`. Le harnais produit les deux bases et controle les
+deux directions : la base WebAuthn est refusee pour une credential fido-u2f, la base U2F est
+refusee pour une autre credential.
+
 La forme de la signature suit le transport. Une cle EC2 qui signe au niveau WebAuthn remet
 `r || s` ; une cle U2F seule passe par la couche de compatibilite CTAP1, qui remet le DER
 `SEQUENCE { INTEGER r, INTEGER s }` y compris pour une assertion. Les deux formes sont acceptees,
@@ -300,15 +307,20 @@ origine qui ne correspond pas au `rpId`. Les causes, dans l'ordre ou on les ecar
    pas le type de credential. Le membre `publicKey` est obligatoire sur `create()` comme sur
    `get()` ; la forme plate heritee de WebAuthn Level 1 (options au premier niveau) est refusee par
    Firefox, qui rejette la requete avant de parler a l'authenticateur.
-5. Forme de la signature : une cle U2F seule remet la signature d'assertion en DER, la forme de
-   la couche de compatibilite CTAP1, pas en `r || s`. Les deux formes sont acceptees, une forme
-   malformee est refusee. Le harnais porte les deux formes et un cas de forme malformee, donc la
-   forme n'est pas ce qui fait passer une signature. La base est une autre mesure : la cle CTAP1 signe
+5. Forme et base de la signature : une cle U2F seule remet la signature d'assertion en DER, la
+   forme de la couche de compatibilite CTAP1, pas en `r || s`. Les deux formes sont acceptees, une
+   forme malformee est refusee, donc la forme n'est pas ce qui fait passer une signature. La base,
+   en revanche, est choisie par le format enregistre avec la credential (`fmt`) : la base U2F pour
+   une credential fido-u2f, la base WebAuthn `hash(authData) + hash(clientDataJSON)` pour les
+   autres. Elle n'est pas essayee dans les deux sens au moment de verifier, sinon le controle ne
+   porterait plus sur ce sur quoi la signature est faite.
+
+   Mesure sur la YubiKey NEO reelle (`tests/assert_base.py`, et `--self-test` contre un cas connu
+   pour montrer que la sonde ne valide pas toutes les bases) : la cle signe
    `application parameter || presence || counter || challenge parameter`, soit AuthData sans hash
-   suivi du hash des donnees client, alors que le serveur controle
-   `hash(authData) + hash(clientDataJSON)`. La mesure se fait avec `tests/assert_base.py` sur les
-   octets d'une tentative ratee (corps du POST `/webauthn/assert` relu dans le navigateur), parce
-   que la suite ne peut pas savoir ce qu'une cle reelle signe.
+   suivi du hash des donnees client. Une credential enregistree avant la colonne `fmt` porte une
+   valeur par defaut, pas un fait : son format n'etait pas stocke, donc la cle doit etre
+   enregistree de nouveau, ou la ligne reglee a partir de la mesure.
 6. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
    `NotSupportedError`) : un echec immediat, avant tout prompt, vient des options ou de
    l'origine ; un echec apres le prompt vient d'une annulation ou du delai depasse. Une erreur
@@ -414,7 +426,13 @@ COMMIT;"
   une suppression n entre pas dans le comptage, qu elle soit faite par la route ou a la main ;
 - la cle est ensuite a re-enregistrer depuis le tableau de bord (profil `presence`), et une cle qui
   doit ouvrir `/admin` doit etre enregistree depuis la page d administration (profil `passkey`), ce
-  qu une cle U2F seule ne peut pas satisfaire.
+  qu une cle U2F seule ne peut pas satisfaire ;
+- une cle enregistree avant la colonne `fmt` porte la valeur par defaut `none`, donc son assertion
+  est controlee sur la base WebAuthn et echoue de nouveau pour une cle U2F seule : la cle est a
+  re-enregistrer, ou la ligne est reglee a partir de la mesure faite sur les octets recus
+  (`fmt = 'fido-u2f'`), ce qui est une mesure et non une supposition. Une cle enregistree par
+  l application apres la colonne porte son format, et le format choisi a l enregistrement est celui
+  que la cle a pu emettre : une cle U2F seule ne peut emettre que `fido-u2f`.
 
 Le quota de 10 creations par jour porte sur les evenements de creation (`action = 'badge'`
 dans `audit_log`), pas sur les lignes qui restent : supprimer un badge ne rembourse pas le
@@ -441,7 +459,8 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    numerotation heritee), et le PEM construit par PHP est compare au DER produit par la
    reference Python ; un map melangeant les deux doit etre refuse ; les deux formes de
    signature (`r || s` et DER) sont verifiees sur la meme base, et une forme malformee doit
-   etre refusee ;
+   etre refusee ; la base est celle du format enregistre avec la credential, et l'autre base doit
+   etre refusee pour chaque credential, dans les deux sens ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    reinitialisation de mot de passe : lien usage unique, 24 h, adresse sans compte, verou de
    5 demandes, jetons du compte fermes, pages, quotas par compte, exports etancheite, CSRF,

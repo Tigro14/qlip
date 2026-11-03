@@ -19,6 +19,13 @@ use Qlip\Webauthn\Verifier;
  * l'enregistrement : elle ne change plus ensuite. `uv_seen` garde la trace de la
  * premiere verification utilisateur faite par la cle, ce qui permet de continuer a
  * l'exiger quand la cle est capable de la faire.
+ *
+ * `fmt` est stocke lui aussi a l'enregistrement : il porte la base de signature de
+ * l'assertion. Une credential enregistree au format fido-u2f (la seule que peut emettre
+ * une cle U2F seule) signe la base U2F, une autre la base WebAuthn. Une credential
+ * enregistree avant cette colonne a une valeur par defaut, pas un fait : son format
+ * n'etait pas connu, donc elle doit etre enregistree de nouveau, ou regler a partir d une
+ * mesure (tests/assert_base.py).
  */
 final class Credentials
 {
@@ -42,8 +49,8 @@ final class Credentials
         $verified = $this->verifier->verifyRegistration($attestationB64url, $clientDataB64url, $challengeB64url, $policy);
 
         $this->db->exec(
-            'INSERT INTO webauthn_credentials (user_id, credential_id, cose, sign_count, aaguid, policy, uv_seen, created_at)
-             VALUES (:user_id, :credential_id, :cose, :sign_count, :aaguid, :policy, :uv_seen, :created_at)',
+            'INSERT INTO webauthn_credentials (user_id, credential_id, cose, sign_count, aaguid, policy, uv_seen, fmt, created_at)
+             VALUES (:user_id, :credential_id, :cose, :sign_count, :aaguid, :policy, :uv_seen, :fmt, :created_at)',
             [
                 ':user_id' => $userId,
                 // L'ID de credential est binaire : on le stocke en base64url.
@@ -53,6 +60,8 @@ final class Credentials
                 ':aaguid' => $verified['aaguid'],
                 ':policy' => $verified['policy'],
                 ':uv_seen' => $verified['user_verified'] ? 1 : 0,
+                // Le format lu a l'enregistrement : il porte la base de signature de l'assertion.
+                ':fmt' => $verified['fmt'],
                 ':created_at' => now(),
             ]
         );
@@ -94,6 +103,7 @@ final class Credentials
                 'sign_count' => (int) $credential['sign_count'],
                 'policy' => (string) ($credential['policy'] ?? Policy::REQUIRED),
                 'uv_seen' => (bool) ($credential['uv_seen'] ?? false),
+                'fmt' => (string) ($credential['fmt'] ?? 'none'),
             ],
             $challengeB64url,
             $policy

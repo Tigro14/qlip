@@ -136,6 +136,31 @@ def raw_signature(signature, size):
     return r.to_bytes(size, "big") + s.to_bytes(size, "big")
 
 
+def assertion_base(fmt, data, client, rp_id=None):
+    """La base que la spec definit pour une assertion, selon le format de la credential.
+
+    WebAuthn (Level 1 et Level 2) : hash(AuthData) + hash(clientDataJSON).
+
+    FIDO U2F, reponse d authentification : application parameter (le hash du RP ID) + octet de
+    presence utilisateur + counter + challenge parameter (le hash des donnees client). Les trois
+    premiers sont exactement les 37 octets d AuthData, sans hash. C est la base mesuree sur une
+    cle U2F seule reelle (tests/assert_base.py), et le harnais ne doit pas signer l autre pour
+    faire passer un test : une cle U2F seule ne sait pas signer la base WebAuthn.
+    """
+    client_hash = hashlib.sha256(client).digest()
+
+    if fmt == "fido-u2f":
+        return data + client_hash
+
+    return hashlib.sha256(data).digest() + client_hash
+
+
+def other_fmt(fmt):
+    """L autre format, donc l autre base : une signature faite sur la base d un format qui
+    n est pas celui de la credential doit etre refusee."""
+    return "none" if fmt == "fido-u2f" else "fido-u2f"
+
+
 def auth_data(flags, sign_count, credential_id, cose, include_at, rp_id=None):
     out = hashlib.sha256((rp_id or RP_ID).encode()).digest() + bytes([flags]) + sign_count.to_bytes(4, "big")
 
@@ -212,24 +237,31 @@ def fixture(
         "sign_count": 1,
     }
 
-    # Assertion : compteur 2, plus de drapeau AT.
+    # Assertion : compteur 2, plus de drapeau AT. La base est celle que la spec definit pour le
+    # format enregistre avec la credential.
     assertion_data = auth_data(0x05 if can_verify else 0x01, 2, credential_id, cose, False)
     get_client = client_data("webauthn.get", ORIGIN)
-    message_assert = hashlib.sha256(assertion_data).digest() + hashlib.sha256(get_client).digest()
-    reference = wire_form(key, message_assert, alg)
-    signature = raw_signature(reference, 32) if alg == "ES256" else reference
+    reference = wire_form(key, assertion_base(fmt, assertion_data, get_client), alg)
+
+    # La forme que le navigateur transmet : r || s pour une assertion WebAuthn, le DER pour une
+    # cle U2F seule, qui passe par la couche de compatibilite CTAP1. Les deux formes verifient la
+    # meme base, donc les deux sont testees.
+    if alg == "ES256":
+        transmitted, other = (reference, raw_signature(reference, 32)) if fmt == "fido-u2f" else (raw_signature(reference, 32), reference)
+    else:
+        transmitted, other = reference, reference
 
     assertion = {
         "auth_data": b64url(assertion_data),
         "client_data": b64url(get_client),
-        "signature": b64url(signature),
+        "signature": b64url(transmitted),
         "sign_count": 2,
     }
 
     # La meme signature dans l autre forme : r || s est la forme de la spec, le DER est celle
     # que la couche de compatibilite CTAP1 d une cle U2F seule transmet. Les deux doivent
     # verifier la meme base ; pour RSA il n y a qu une forme.
-    other_form = dict(assertion, signature=b64url(reference))
+    other_form = dict(assertion, signature=b64url(other))
 
     # Forme malformee : la longueur annoncee par la sequence ne couvre pas le contenu (EC2), et
     # le block n a pas la taille du modulo (RSA). Elle doit etre refusee, sinon accepter le DER
@@ -269,6 +301,21 @@ def fixture(
         sign_count=3,
     )
 
+    # Signature faite sur l autre base. La base ne se choisit pas au moment de verifier : elle
+    # vient du format enregistre avec la credential. Une signature faite sur la base de l autre
+    # format doit etre refusee, sinon le controle ne porte plus sur ce sur quoi la signature est
+    # faite. Le compteur est plus grand que celui qui est stocke, donc ce n est pas lui qui refuse.
+    other_data = auth_data(0x05 if can_verify else 0x01, 3, credential_id, cose, False)
+    other_client = client_data("webauthn.get", ORIGIN)
+    wrong_base = sign(key, assertion_base(other_fmt(fmt), other_data, other_client), alg)
+    other_base = dict(
+        assertion,
+        auth_data=b64url(other_data),
+        client_data=b64url(other_client),
+        signature=b64url(wrong_base),
+        sign_count=3,
+    )
+
     key_point = None if refused else point(cose)
 
     # Contre-verification independante : la cle publique en DER produite par la reference
@@ -278,6 +325,7 @@ def fixture(
     return {
         "name": name,
         "policy": policy,
+        "fmt": fmt,
         "user_verified": can_verify,
         "point": None if key_point is None else b64url(key_point),
         "der": None if refused else b64url(key.public_key().public_bytes(
@@ -292,6 +340,7 @@ def fixture(
         "replay": replay,
         "bad_origin": bad_origin,
         "bad_signature": bad_signature_case,
+        "other_base": other_base,
         "bad_base": bad_base,
     }
 

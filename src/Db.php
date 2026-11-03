@@ -82,9 +82,9 @@ final class Db
         }
 
         // Colonnes ajoutees apres la premiere version du schema : une base existante
-        // n'est jamais reconstruite, seulement completee. La politique par credential
-        // et la trace de la premiere verification utilisateur sont lues par Verifier a
-        // chaque assertion, donc une base creee avant doit les avoir.
+        // n'est jamais reconstruite, seulement completee. La politique par credential, la
+        // trace de la premiere verification utilisateur et le format d'attestation sont lus
+        // par Verifier a chaque assertion, donc une base creee avant doit les avoir.
         $columns = $this->columns('webauthn_credentials');
 
         if (!in_array('policy', $columns, true)) {
@@ -93,6 +93,13 @@ final class Db
 
         if (!in_array('uv_seen', $columns, true)) {
             $this->pdo->exec('ALTER TABLE webauthn_credentials ADD COLUMN uv_seen INTEGER NOT NULL DEFAULT 0');
+        }
+
+        // Le format d'attestation enregistre avec la credential porte la base de signature de
+        // l'assertion : une cle U2F seule signe la base U2F, une autre cle la base WebAuthn.
+        // Sans cette colonne, la base ne peut pas etre choisie pour une credential deja en base.
+        if (!in_array('fmt', $columns, true)) {
+            $this->pdo->exec("ALTER TABLE webauthn_credentials ADD COLUMN fmt TEXT NOT NULL DEFAULT 'none'");
         }
     }
 

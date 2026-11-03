@@ -96,6 +96,11 @@ fichier, dans le namespace `Qlip\...`.
   `0x00 || rpIdHash || clientDataHash || credentialId || publicKeyU2F`, pas sur le message
   WebAuthn : la base fait partie du controle. `x5c` y est obligatoire, la signature y est deja
   en DER ;
+ - la base de signature d une assertion est choisie par le format enregistre avec la credential
+   (`fmt`), elle n est pas essayee dans les deux sens au moment de verifier : la base U2F (AuthData
+   sans hash + hash des donnees client) pour une credential fido-u2f, la base WebAuthn pour les
+   autres. Le harnais produit les deux bases et refuse la mauvaise pour chaque credential, dans les
+   deux sens ;
 - en-tetes de securite poses dans `Response::send()`, sur toutes les reponses (CSP,
   `nosniff`, `frame-ancestors`) ;
 - SQL uniquement en prepare, avec params nommes, sans texte d'une requete dans la requete
@@ -173,8 +178,11 @@ assertion a partir des octets recus d une ceremonie reelle, ce que la suite ne p
 Pour une cle U2F seule, la base de la reponse d authentification est application parameter + octet
 de presence utilisateur + counter + challenge parameter, soit AuthData sans hash suivi du hash des
 donnees client, et non la base WebAuthn hash(AuthData) + hash(clientDataJSON). La sonde est teste
-contre un cas connu : le harnais signe la base WebAuthn, donc la sonde doit nommer cette base et
-refuser l autre. Une sonde qui accepte toutes les bases ne mesure rien.
+contre un cas connu (--self-test) fabrique par elle-meme, avec une cle qu elle genere et un AuthData
+qu elle ecrit : elle doit nommer la base WebAuthn et refuser les autres. Une sonde qui accepte
+toutes les bases ne mesure rien. Mesure faite sur la cle reelle : la base U2F verifie, la base
+WebAuthn est refusee, donc le verificateur choisit la base par le format enregistre et ne les essaie
+pas dans les deux sens.
 L'identifiant de rapport vient du descripteur (item Report ID, balise 8 en type Global) : la
 convention `0x20`/`0x21` ne s'applique pas a un device sans reports numerotes, et hidraw ne met
 rien au debut des octets lus dans ce cas. La trame recue est imprimee en octets bruts, parce
@@ -230,8 +238,10 @@ utilise le MTA local.
   dans la spec, donc un harnais qui l'ecrit ne peut pas voir l'erreur devant un vrai
   navigateur. Handle d'utilisateur : 16 octets minimum (la spec), donc l'id est ecrit en
   big-endian complete par des zeros.
-- Schema : `policy` et `uv_seen` sont ajoutees a `webauthn_credentials` par un ALTER garde par
-  `PRAGMA table_info`, la base de production n'est jamais reconstruite.
+- Schema : `policy`, `uv_seen` et `fmt` sont ajoutees a `webauthn_credentials` par un ALTER garde
+  par `PRAGMA table_info`, la base de production n'est jamais reconstruite. Une credential enregistree
+  avant `fmt` porte la valeur par defaut, pas un fait : son format n'etait pas stocke, donc la cle
+  doit etre enregistree de nouveau ou la ligne reglee a partir de la mesure.
 - `session_status()` peut mentir avec un binaire PHP statique : la logique s'appuie sur
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et

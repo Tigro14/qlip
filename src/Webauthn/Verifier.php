@@ -18,6 +18,10 @@ namespace Qlip\Webauthn;
  * l'attestation est acceptee comme une declaration (le controle d'origine et du
  * compteur reste fait).
  *
+ * La base de signature d'une assertion vient du format enregistre avec la credential :
+ * la base U2F pour une credential fido-u2f, la base WebAuthn pour les autres. Elle n'est
+ * pas essayee dans les deux sens au moment de verifier : voir assertionBase.
+ *
  * La politique de verification utilisateur vient du profil de ceremonie (voir
  * Policy) : elle n'est pas laisse au choix du navigateur.
  */
@@ -105,7 +109,7 @@ final class Verifier
     /**
      * Assertion (login).
      *
-     * @param array{credential_id: string, cose: string, sign_count: int, policy?: string, uv_seen?: bool} $credential
+     * @param array{credential_id: string, cose: string, sign_count: int, policy?: string, uv_seen?: bool, fmt?: string} $credential
      * @return array{credential_id: string, sign_count: int, policy: string, user_verified: bool}
      */
     public function verifyAssertion(
@@ -152,11 +156,13 @@ final class Verifier
         }
 
         $key = CoseKey::toPem(Cbor::decode(base64url_decode($credential['cose'])));
-        $message = hash('sha256', $authData, true) . hash('sha256', $clientDataRaw, true);
+        $message = $this->assertionBase($authData, $clientDataRaw, (string) ($credential['fmt'] ?? 'none'));
 
         // La forme de la signature n'est pas un choix de controle : r || s (la spec) ou DER
-        // (la couche de compatibilite CTAP1 d une cle U2F seule) sont acceptees, la base
-        // verifiee reste hash(authData) + hash(clientData). Une forme malformee est refusee.
+        // (la couche de compatibilite CTAP1 d une cle U2F seule) sont acceptees. La base, en
+        // revanche, est choisie par le format enregistre avec la credential : elle ne peut pas
+        // etre testee dans les deux sens au moment de verifier, sinon le controle ne porte plus
+        // sur ce sur quoi la signature est faite. Une forme malformee est refusee.
         if (!Signature::verify($message, base64url_decode($signatureB64url), $key)) {
             throw new \InvalidArgumentException('Signature invalide.');
         }
@@ -183,6 +189,33 @@ final class Verifier
     }
 
     // ------------------------------------------------------------------
+
+    /**
+     * Base de signature d'une assertion, choisie par le format d'attestation enregistre avec
+     * la credential.
+     *
+     * WebAuthn (Level 1 et Level 2) : hash(AuthData) + hash(clientDataJSON).
+     *
+     * FIDO U2F, reponse d'authentification : application parameter (le hash du RP ID) + octet
+     * de presence utilisateur + counter + challenge parameter (le hash des donnees client).
+     * Les trois premiers sont exactement les 37 octets d'AuthData, sans hash : AuthData vaut
+     * ici rpIdHash + drapeau + counter, et le drapeau d'une reponse U2F est l'octet de presence.
+     * La difference avec la base WebAuthn est que AuthData n'est pas soumis au hash.
+     *
+     * Ce n'est pas une supposition : la base a ete mesuree sur une cle reelle (YubiKey NEO),
+     * et une assertion d'une cle U2F seule ne verifie que sur la base U2F. Le harnais produit
+     * les deux bases et controle que la mauvaise est refusee pour chaque credential.
+     */
+    private function assertionBase(string $authData, string $clientDataRaw, string $format): string
+    {
+        $clientHash = hash('sha256', $clientDataRaw, true);
+
+        if ($format === 'fido-u2f') {
+            return $authData . $clientHash;
+        }
+
+        return hash('sha256', $authData, true) . $clientHash;
+    }
 
     /**
      * @param array<string, mixed> $statement
@@ -279,7 +312,7 @@ final class Verifier
 
         // La signature d attestation doit verifier : x5c n est pas optionnel dans ce
         // format, donc il n y a pas de cas « declaration » comme pour 'packed'.
-        if (!$this->verifyAttestation($statement, $message, $data, true)) {
+        if (!$this->verifyAttestation($statement, $message, $data)) {
             throw new \InvalidArgumentException('Signature d attestation U2F invalide.');
         }
 

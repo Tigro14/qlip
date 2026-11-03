@@ -195,14 +195,30 @@ class FakeAuthenticator:
         self.cose = wf.cose_ec(self.key)
         self.credential_id = credential_id
         self.can_verify = can_verify
+        # Le format de la ceremonie est enregistre avec la credential : il porte la base de
+        # signature de l assertion.
+        self.fmt = "none"
 
     def flags(self, base):
         return base | 0x04 if self.can_verify else base
 
-    def digest(self, auth_data, client_data):
-        return hashlib.sha256(auth_data).digest() + hashlib.sha256(client_data).digest()
+    def digest(self, auth_data, client_data, fmt=None):
+        """La base que la spec definit pour le format de la credential.
+
+        WebAuthn : hash(AuthData) + hash(clientDataJSON). Pour une cle U2F seule, la base de la
+        reponse d authentification est application parameter + octet de presence + counter +
+        challenge parameter, soit AuthData sans hash suivi du hash des donnees client : c est ce
+        que mesure tests/assert_base.py sur une cle reelle.
+        """
+        client_hash = hashlib.sha256(client_data).digest()
+
+        if (fmt or self.fmt) == "fido-u2f":
+            return auth_data + client_hash
+
+        return hashlib.sha256(auth_data).digest() + client_hash
 
     def register(self, challenge, fmt="none"):
+        self.fmt = fmt
         auth_data = wf.auth_data(self.flags(0x41), 1, self.credential_id, self.cose, True, RP_ID)
         client_data = wf.client_data("webauthn.create", ORIGIN, challenge)
 
@@ -220,11 +236,12 @@ class FakeAuthenticator:
     def register_u2f(self, challenge):
         """Ceremonie d une cle U2F seule : fmt = fido-u2f, x5c obligatoire, signature en DER.
 
-        La base de signature est 0x00 || rpIdHash || clientDataHash || credentialId ||
-        publicKeyU2F, pas hash(authData) + hash(clientData). Le premier octet est le
-        contre-signal (0x00 pour l attestation). Une signature faite sur l autre base ne
-        passe pas : c est ce que verifie le harnais.
+        La base de signature d attestation est 0x00 || rpIdHash || clientDataHash || credentialId
+        || publicKeyU2F, pas hash(authData) + hash(clientData). Le premier octet est le
+        contre-signal (0x00 pour l attestation). Une signature faite sur l autre base ne passe
+        pas : c est ce que verifie le harnais.
         """
+        self.fmt = "fido-u2f"
         auth_data = wf.auth_data(self.flags(0x41), 1, self.credential_id, self.cose, True, RP_ID)
         client_data = wf.client_data("webauthn.create", ORIGIN, challenge)
         point = wf.point(self.cose)
@@ -249,10 +266,14 @@ class FakeAuthenticator:
             "client_data": wf.b64url(client_data),
         }
 
-    def assert_(self, challenge, sign_count, form="raw"):
+    def assert_(self, challenge, sign_count, form="raw", other_base=False):
         auth_data = wf.auth_data(self.flags(0x01), sign_count, self.credential_id, self.cose, False, RP_ID)
         client_data = wf.client_data("webauthn.get", ORIGIN, challenge)
-        wire = wf.wire_form(self.key, self.digest(auth_data, client_data), "ES256")
+        # La base est celle du format enregistre avec la credential. `other_base` produit la base
+        # de l autre format, qui doit etre refusee : la base ne se choisit pas au moment de
+        # verifier, et le harnais ne doit pas produire la base que l implementation lit.
+        message = self.digest(auth_data, client_data, wf.other_fmt(self.fmt) if other_base else None)
+        wire = wf.wire_form(self.key, message, "ES256")
 
         return {
             "credential_id": wf.b64url(self.credential_id),
@@ -497,6 +518,16 @@ def run():
 
     check("assertion en forme DER", status == 200 and data.get("ok") is True, data.get("error", ""))
 
+    # La base attendue est celle du format enregistre avec la credential. Cette cle est
+    # enregistree sans attestation, donc la base U2F ne la concerne pas : une signature faite
+    # sur la base U2F doit etre refusee. Le harnais ne doit pas produire la base que
+    # l implementation lit, sinon la base ne se controle pas.
+    csrf = csrf_of(get("/admin/yubikey")[2])
+    status, ceremony = get_json("/webauthn/challenge")
+    status, data = post_json("/webauthn/assert", dict(csrf=csrf, **der_key.assert_(b64url_decode(ceremony["challenge"]), 3, other_base=True)))
+
+    check("base U2F refusee pour une credential non fido-u2f", status == 400 and "Signature" in data.get("error", ""), data.get("error", ""))
+
     csrf = csrf_of(get("/admin/yubikey")[2])
 
     # 10. Un compte non administrateur est refuse, meme avec une credential
@@ -576,6 +607,7 @@ def run():
 
     check("enrolement d une cle U2F", status == 201, data.get("error", ""))
     check("politique stockee par la credential", data.get("credential", {}).get("policy") == "discouraged", json.dumps(data.get("credential", {})))
+    check("format stocke par la credential", data.get("credential", {}).get("fmt") == "fido-u2f", json.dumps(data.get("credential", {})))
     two_credential = data.get("credential", {}).get("id")
 
     status, headers, _ = post("/logout", {"csrf": two_csrf}, two)
@@ -634,6 +666,40 @@ def run():
     check("second facteur accepte", status == 200 and data.get("ok") is True, data.get("error", ""))
     check("la ceremonie renvoie la redirection", str(data.get("redirect", "")).endswith("/dashboard"), json.dumps(data))
     check("tableau de bord apres le second facteur", get("/dashboard", two)[0] == 200)
+
+    # La cle U2F seule signe la base U2F : application parameter (le hash du RP ID) + octet de
+    # presence + counter + challenge parameter, ce qui fait AuthData sans hash suivi du hash des
+    # donnees client. C est la base mesuree sur la cle reelle (tests/assert_base.py), et elle
+    # vient du format enregistre avec la credential : la base WebAuthn doit etre refusee pour
+    # cette credential, le serveur ne les essaie pas dans les deux sens.
+    # Le jeton CSRF a ete regenere par la ceremonie qui a confirme la session : le vieux jeton
+    # ne deconnecte pas, et une session encore confirmee rendrait le check faux. On le relit.
+    two_csrf = csrf_of(get("/dashboard", two)[2])
+    status, headers, _ = post("/logout", {"csrf": two_csrf}, two)
+
+    check("deconnexion avant la mesure de base", status == 302, headers.get("location", ""))
+
+    status, headers, _ = post("/login", {"csrf": csrf_of(get("/login", two)[2]), "email": "2fa@qlip.test", "password": "un-mot-de-passe-long"}, two)
+
+    check("reconnexion au second facteur", status == 302 and "/login/2fa" in headers.get("location", ""), headers.get("location", ""))
+
+    two_csrf = csrf_of(get("/login/2fa", two)[2])
+    status, ceremony = get_json("/webauthn/challenge", two)
+    status, data = post_json("/login/2fa", dict(csrf=two_csrf, **u2f.assert_(b64url_decode(ceremony["challenge"]), 3, other_base=True)), two)
+
+    check("base WebAuthn refusee pour une credential fido-u2f", status == 400 and "Signature" in data.get("error", ""), data.get("error", ""))
+
+    status, headers, _ = get("/dashboard", two)
+
+    # La ceremonie echouee ne confirme pas la session : la page du second facteur est une session
+    # en attente, sans acces.
+    check("la session reste non confirmee", status == 302 and "/login" in headers.get("location", ""), headers.get("location", ""))
+
+    two_csrf = csrf_of(get("/login/2fa", two)[2])
+    status, ceremony = get_json("/webauthn/challenge", two)
+    status, data = post_json("/login/2fa", dict(csrf=two_csrf, **u2f.assert_(b64url_decode(ceremony["challenge"]), 4)), two)
+
+    check("cle U2F acceptee sur sa base", status == 200 and data.get("ok") is True, data.get("error", ""))
 
     # La politique ne peut pas etre abaissee par le profil : la page d administration rend le
     # profil passkey, donc la meme cle est refusee sur cette ceremonie. Un compte non
