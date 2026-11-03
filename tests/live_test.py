@@ -273,10 +273,18 @@ def run():
     # 6. Parcours complet, avec un compte de test. Ce qui est cree est supprime a la fin,
     # donc la partie ecriture est repeitable. Le slug est fixe pour qu'on le retrouve dans
     # l'administration si une etape echoue avant la fin.
-    status, headers, body = post("/login", {"email": EMAIL, "password": PASSWORD}, anonymous)
+    # Le mot de passe seul ne suffit pas : POST /login exige le jeton CSRF de la page.
+    status, headers, body = post("/login", {"csrf": csrf_of(get("/login", anonymous)[2]), "email": EMAIL, "password": PASSWORD}, anonymous)
 
     if status != 302:
         check("connexion du compte de test", False, text(body)[:60])
+        return
+
+    # Un compte qui a une credential est mis en attente : la ceremonie ouvre seule la session,
+    # et cette partie ne peut pas la faire (pas de cle ici). C est pour cela que le protocole
+    # d ecriture demande un compte de test sans second facteur, jamais le compte administrateur.
+    if "/login/2fa" in headers.get("location", ""):
+        check("compte de test sans second facteur", False, "%s (second facteur demande)" % headers.get("location", ""))
         return
 
     csrf = csrf_of(get("/dashboard", anonymous)[2])
