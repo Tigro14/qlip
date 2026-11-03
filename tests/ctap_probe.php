@@ -56,6 +56,19 @@ const UV_METHODS = [
     7 => 'connaissance externe (PIN)',
 ];
 
+/** Codes d erreur CTAPHID (le premier octet du payload d une reponse CTAPHID_ERROR). */
+const CTAPHID_ERRORS = [
+    0x01 => 'commande invalide',
+    0x02 => 'payload invalide',
+    0x03 => 'taille annoncee invalide (BCNT)',
+    0x04 => 'numero de sequence invalide',
+    0x05 => 'timeout',
+    0x06 => 'canal occupe',
+    0x0A => 'verrou demande',
+    0x0B => 'canal invalide',
+    0x7F => 'autre',
+];
+
 $failures = 0;
 
 function check(string $label, bool $ok, string $detail = ''): void
@@ -183,9 +196,11 @@ function receive($handle, int $seconds): ?string
 
 /**
  * Trame d initialisation : identifiant de rapport (quand il existe), canal, balise, taille,
- * payload.
+ * payload. La balise recue porte le drapeau d initialisation (0x80) : une erreur sur la trame
+ * d initialisation est 0xbf, pas 0x3f. Le code est donc compare sans le drapeau, et le drapeau
+ * est garde separement.
  *
- * @return array{cid: string, cmd: int, size: int, payload: string}|null
+ * @return array{cid: string, init: bool, cmd: int, size: int, payload: string}|null
  */
 function parse(string $frame, int $skip): ?array
 {
@@ -193,11 +208,13 @@ function parse(string $frame, int $skip): ?array
         return null;
     }
 
+    $header = ord($frame[$skip + 4]);
     $size = (ord($frame[$skip + 5]) << 16) + (ord($frame[$skip + 6]) << 8) + ord($frame[$skip + 7]);
 
     return [
         'cid' => substr($frame, $skip, 4),
-        'cmd' => ord($frame[$skip + 4]),
+        'init' => ($header & TYPE_INIT) === TYPE_INIT,
+        'cmd' => $header & 0x7F,
         'size' => $size,
         'payload' => substr($frame, $skip + 8, $size),
     ];
@@ -289,7 +306,7 @@ $answer = null;
 foreach ([$skip, $skip === 0 ? 1 : 0] as $form) {
     $try = parse($frame, $form);
 
-    if ($try !== null && $try['cmd'] === CMD_INIT && strlen($try['payload']) >= 16 && substr($try['payload'], 0, 8) === $nonce) {
+    if ($try !== null && $try['init'] && $try['cmd'] === CMD_INIT && strlen($try['payload']) >= 16 && substr($try['payload'], 0, 8) === $nonce) {
         $answer = $try;
         $skip = $form;
 
@@ -298,15 +315,41 @@ foreach ([$skip, $skip === 0 ? 1 : 0] as $form) {
 }
 
 if ($answer === null) {
+    $refused = false;
+
     foreach ([0, 1] as $form) {
         $try = parse($frame, $form);
 
-        if ($try !== null) {
-            echo '  relu avec le decalage ', $form, ' : balise ', byte($try['cmd']), ', payload ', hex($try['payload']), PHP_EOL;
+        if ($try === null) {
+            continue;
+        }
+
+        echo '  relu avec le decalage ', $form, ' : canal ', hex($try['cid']),
+            ' balise ', byte($try['cmd']), ' (trame ', $try['init'] ? 'd initialisation' : 'de continuation', ')',
+            ', taille annoncee ', $try['size'], ', payload ', hex($try['payload']), PHP_EOL;
+
+        if ($try['cmd'] === CMD_ERROR && $try['payload'] !== '') {
+            $code = ord($try['payload'][0]);
+
+            echo '    balise erreur : code lu ', byte($code), ' ', CTAPHID_ERRORS[$code] ?? 'code inconnu', PHP_EOL;
+
+            if ($try['size'] > strlen($frame) && strlen($frame) > $form + 7) {
+                $alt = ord($frame[$form + 7]);
+
+                echo '    la taille annoncee (', $try['size'], ') ne tient pas dans une trame de ', REPORT_SIZE, ' octets', PHP_EOL;
+                echo '    si BCNT est ecrit sur 2 octets, le code est ', byte($alt), ' ', CTAPHID_ERRORS[$alt] ?? 'code inconnu', PHP_EOL;
+            }
+
+            $refused = true;
         }
     }
 
-    check('CTAPHID_INIT', false, 'pas d echo du nonce : cle CTAP1 seule, ou reponse sur l autre interface du device');
+    // Le canal de diffusion est repris dans la reponse : le tramage est donc correct, et la
+    // cle a refuse le handshake. CTAPHID_INIT est obligatoire sur le transport HID pour un
+    // authenticateur CTAP2, donc un refus ici veut dire que cette interface ne fait pas CTAP2.
+    check('CTAPHID_INIT', false, $refused
+        ? 'reponse d erreur au lieu de l echo du nonce : la cle refuse le handshake, donc pas de CTAP2 sur cette interface'
+        : 'pas d echo du nonce, et la trame n est pas lisible comme une trame d initialisation');
     exit(1);
 }
 
@@ -331,6 +374,13 @@ if ($answer['payload'] === '') {
     exit(1);
 }
 
+if ($answer['cmd'] === CMD_ERROR) {
+    $code = ord($answer['payload'][0]);
+
+    check('authenticatorGetInfo', false, 'erreur CTAPHID ' . byte($code) . ' (' . (CTAPHID_ERRORS[$code] ?? 'code inconnu') . ') : la cle ne parle pas CTAP2 sur cette interface');
+    exit(1);
+}
+
 if ($answer['cmd'] !== CMD_CBOR) {
     check('authenticatorGetInfo', false, 'trame recue avec la balise ' . byte($answer['cmd']));
     exit(1);
@@ -339,7 +389,7 @@ if ($answer['cmd'] !== CMD_CBOR) {
 $status = ord($answer['payload'][0]);
 
 if ($status !== 0) {
-    check('authenticatorGetInfo', false, 'statut CTAP ' . byte($status));
+    check('authenticatorGetInfo', false, 'statut CTAP ' . byte($status) . ' (' . (CTAPHID_ERRORS[$status] ?? 'code inconnu') . ')');
     exit(1);
 }
 
