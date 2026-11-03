@@ -91,6 +91,7 @@ check('schema', $tables === [
     'audit_log',
     'badges',
     'pages',
+    'reset_tokens',
     'users',
     'verify_tokens',
     'webauthn_credentials',
@@ -206,6 +207,98 @@ $app->session = new Session(['token' => random_token(16)], true);
 $response = $send('POST', '/login', ['email' => 'admin@qlip.test', 'password' => 'mot-de-passe-long']);
 
 check('connexion', $response->status() === 302 && str_ends_with($response->header('Location') ?? '', '/dashboard'), $response->header('Location') ?? '');
+
+// 7b. Reinitialisation de mot de passe. Le lien est usage unique et valable 24 h, la
+// reponse ne dit pas si l'adresse a un compte, et le verou est compte sur la demande
+// (une adresse sans compte consomme la meme part, sinon le formulaire servirait a tester
+// les adresses sans limite).
+$app->session = new Session(['token' => random_token(16)], true);
+
+/**
+ * Nombre de messages journalises pour une adresse. On compte dans le journal, pas dans
+ * l outbox : le nom de fichier porte la seconde et l adresse, donc deux envois a la meme
+ * adresse dans la meme seconde ecrivent le meme fichier.
+ */
+$mailed = static function (string $address) use ($config): int {
+    $log = (string) file_get_contents($config->varPath . '/log/mail.log');
+
+    return count(array_filter(explode("\n", $log), static fn (string $line): bool => str_contains($line, $address)));
+};
+
+$forgotten = $app->users->register('oublie@qlip.test', 'un-mot-de-passe-long');
+$before = $mailed('oublie@qlip.test');
+
+$response = $send('POST', '/password', ['email' => 'oublie@qlip.test']);
+
+check('reinitialisation : demande acceptee', $response->status() === 200, (string) $response->status());
+check('reinitialisation : la reponse ne dit pas si le compte existe', str_contains($response->body(), 'Si cette adresse a un compte'));
+
+$unknown = $send('POST', '/password', ['email' => 'sans-compte@qlip.test']);
+
+check('reinitialisation : une adresse sans compte rend la meme page', $unknown->status() === 200 && str_contains($unknown->body(), 'Si cette adresse a un compte'));
+check('reinitialisation : un message envoye pour un compte qui existe', $mailed('oublie@qlip.test') === $before + 1, (string) $mailed('oublie@qlip.test'));
+check('reinitialisation : rien envoye pour une adresse sans compte', $mailed('sans-compte@qlip.test') === 0, (string) $mailed('sans-compte@qlip.test'));
+
+$first = $app->users->requestReset('oublie@qlip.test');
+$second = $app->users->requestReset('oublie@qlip.test');
+
+check('jeton de reinitialisation', strlen($first['token']) === 64, $first['token']);
+
+check('formulaire de reinitialisation', $send('GET', '/password/reset/' . $first['token'])->status() === 200);
+check('CSRF refuse sur la reinitialisation', $router->dispatch(new Request('POST', '/password/reset/' . $first['token'], [], ['csrf' => 'mauvais-jeton', 'password' => 'un-mot-de-passe-long']))->status() === 400);
+
+$refused = $send('POST', '/password/reset/' . $first['token'], ['password' => 'court']);
+
+check('mot de passe trop court refuse', $refused->status() === 200 && str_contains($refused->body(), 'trop court'), trim((string) preg_replace('/\s+/', ' ', strip_tags($refused->body()))));
+check('le lien n est pas consomme par un refus', $app->users->resetToken($first['token']) !== null);
+
+$response = $send('POST', '/password/reset/' . $first['token'], ['password' => 'nouveau-mot-de-passe-long']);
+
+check('mot de passe change', $response->status() === 302 && str_ends_with($response->header('Location') ?? '', '/dashboard'), $response->header('Location') ?? '');
+check('session pointee sur le compte', (int) $app->session->get('user_id', 0) === (int) $forgotten['user']['id']);
+check('nouveau mot de passe accepte', $app->users->attempt('oublie@qlip.test', 'nouveau-mot-de-passe-long') !== null);
+check('ancien mot de passe refuse', $app->users->attempt('oublie@qlip.test', 'un-mot-de-passe-long') === null);
+check('compte active par le lien de reinitialisation', $app->users->find((int) $forgotten['user']['id'])['verified_at'] !== null);
+check('lien usage unique', $send('POST', '/password/reset/' . $first['token'], ['password' => 'un-mot-de-passe-long'])->status() === 400);
+
+// Un lien demande avant le changement ne doit plus servir apres : les jetons du compte
+// sont fermes quand le mot de passe change.
+check('autres liens du compte fermes', $app->users->resetToken($second['token']) === null);
+check('formulaire ferme pour un lien usage', $send('GET', '/password/reset/' . $second['token'])->status() === 400);
+
+$stale = random_token(32);
+
+$app->db->exec(
+    'INSERT INTO reset_tokens (user_id, token, created_at) VALUES (:user_id, :token, :created_at)',
+    [':user_id' => (int) $forgotten['user']['id'], ':token' => $stale, ':created_at' => date('Y-m-d H:i:s', time() - 86401)]
+);
+
+check('lien expire refuse', $send('GET', '/password/reset/' . $stale)->status() === 400);
+
+$trace = $app->db->one("SELECT user_id, detail FROM audit_log WHERE action = 'reset_request' AND user_id IS NULL ORDER BY id DESC LIMIT 1");
+
+check('trace d une demande pour une adresse sans compte',
+    $trace !== null && str_contains((string) $trace['detail'], 'sans-compte@qlip.test'),
+    (string) ($trace['detail'] ?? ''));
+
+check('trace de changement de mot de passe', $app->db->count("SELECT COUNT(*) FROM audit_log WHERE action = 'reset' AND user_id = :user_id", [':user_id' => (int) $forgotten['user']['id']]) === 1);
+
+// Verou : 5 demandes par heure et par navigateur, sur une session separee.
+$app->session = new Session(['token' => random_token(16)], true);
+
+for ($attempt = 1; $attempt <= 5; $attempt++) {
+    $response = $send('POST', '/password', ['email' => 'oublie@qlip.test']);
+
+    if ($response->status() !== 200) {
+        check('demandes rejouees', false, 'demande ' . $attempt . ' : ' . $response->status());
+        break;
+    }
+}
+
+check('demandes rejouees', $response->status() === 200);
+check('verou apres 5 demandes', $send('POST', '/password', ['email' => 'oublie@qlip.test'])->status() === 429);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
 
 // 8. Pages : creation, lecture, edition
 $response = $send('POST', '/pages', [
@@ -593,6 +686,7 @@ check('suppression ne rembourse pas le quota', $app->badges->usedToday((int) $ad
 // Le compte : le mot de passe doit etre donne et correct.
 $gone = $app->users->register('compte-a-detruire@qlip.test', 'un-mot-de-passe-long');
 $goneUser = $gone['user'];
+$goneReset = $app->users->requestReset('compte-a-detruire@qlip.test');
 $app->badges->createPage((int) $goneUser['id'], ['title' => 'Page du compte a detruire', 'slug' => 'adetruire']);
 
 $app->session = new Session(['token' => random_token(16), 'user_id' => (int) $goneUser['id']], true);
@@ -607,6 +701,7 @@ check('compte supprime', $response->status() === 200, $response->body());
 check('compte disparu', $app->users->findByEmail('compte-a-detruire@qlip.test') === null);
 check('page du compte disparue', $app->badges->pageBySlug('adetruire') === null);
 check('jeton de verification disparu avec le compte', $app->db->count("SELECT COUNT(*) FROM verify_tokens WHERE token = :token", [':token' => $gone['token']]) === 0);
+check('jeton de reinitialisation disparu avec le compte', $app->db->count("SELECT COUNT(*) FROM reset_tokens WHERE token = :token", [':token' => $goneReset['token']]) === 0);
 check('session videe apres la suppression du compte', $app->session->get('user_id') === null);
 
 // La trace survit au compte : la ligne est ecrite avec l adresse dans le detail, parce que

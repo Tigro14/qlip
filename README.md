@@ -112,6 +112,30 @@ L'inscription exige un email verifie : sans verification, le tableau de bord et 
 creation de badge renvoient 403. Les tentatives de connexion sont limitees a 8 par
 session, puis verrou de 300 secondes.
 
+## Mot de passe oublie
+
+`/password` envoie un lien de reinitialisation a l'adresse du compte, et `GET
+/password/reset/{token}` presente le formulaire du nouveau mot de passe. Le lien est usage
+unique et valable 24 h.
+
+- la page ne dit pas si l'adresse a un compte : la reponse est la meme dans les deux cas,
+  sinon le formulaire servirait a dresser la liste des comptes. Avec le transport `outbox`
+  elle le montre quand meme (le lien est affiche pour les transports de developpement) ;
+- 5 demandes maximum par heure et par session, comptees sur la demande : une adresse sans
+  compte consomme la meme part, sinon on pourrait tester les adresses sans limite ;
+- le POST du nouveau mot de passe exige le jeton CSRF, et la taille minimale (10 caracteres)
+  est controlee cote serveur. Un refus ne consomme pas le lien : le formulaire est repris ;
+- quand un lien sert, les autres liens du meme compte sont fermes : un lien demande la semaine
+  precedente ne doit plus pouvoir changer le mot de passe ;
+- utiliser un lien envoye a la boite prouve le controle de cette boite, ce qui vaut la
+  verification d'email : un compte encore non active est active par la reinitialisation, sinon
+  il n'aurait plus aucun moyen d'entrer (le lien de verification est usage unique lui aussi) ;
+- la session est regeneree et pointe sur le compte, comme pour le lien de verification.
+
+Traces dans `audit_log` : `reset_request` pour la demande (avec l'adresse dans le detail quand
+il n'y a pas de compte, parce que `user_id` reste NULL), et `reset` pour le changement. Ces
+actions ne polluent pas le quota, qui ne porte que sur `action = 'badge'`.
+
 ## Champs des pages
 
 Les champs d une page sont controles cote serveur, pas seulement dans le formulaire :
@@ -235,9 +259,10 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
 5. `tests/webauthn_fixture.py` + `tests/webauthn_check.php` : faux authenticateur
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
-   pages, quotas par compte, exports etancheite, CSRF, ceremony WebAuthn par la route,
-   transports smtp et local : lien masque et echec d envoi signale, suppressions avec
-   confirmation, cascade, quota non rembourse, trace d audit) ;
+   reinitialisation de mot de passe : lien usage unique, 24 h, adresse sans compte, verou de
+   5 demandes, jetons du compte fermes, pages, quotas par compte, exports etancheite, CSRF,
+   ceremony WebAuthn par la route, transports smtp et local : lien masque et echec d envoi
+   signale, suppressions avec confirmation, cascade, quota non rembourse, trace d audit) ;
 7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
    serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
    `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
@@ -249,8 +274,9 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    quel, qu'une adresse avec un retour a la ligne est refusee avant de lancer le MTA, et
    qu'un code nonzero du MTA est signale comme un echec ;
 9. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
-   le PNG decode par zxing, la ceremony WebAuthn par HTTP, et les suppressions (jeton,
-   confirmation, compte, GET refuse en 405) ;
+   le PNG decode par zxing, la ceremony WebAuthn par HTTP, la reinitialisation de mot de
+   passe (reponse identique pour une adresse sans compte, lien usage unique, verou), et les
+   suppressions (jeton, confirmation, compte, GET refuse en 405) ;
 10. `tests/live_test.py` (lance par `tests/live.sh`) : protocole sur l instance deployee,
    voir la section suivante.
 

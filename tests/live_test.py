@@ -228,6 +228,10 @@ def run():
 
     check("404 produit par l'app", status == 404 and answered_by_app(headers), "%d -> %s" % (status, origin(headers)))
 
+    status, headers, _ = get("/password", anonymous)
+
+    check("page de reinitialisation servie par l'app", status == 200 and answered_by_app(headers), "%d -> %s" % (status, origin(headers)))
+
     status, headers, _ = get("/dashboard", anonymous)
 
     check("anonime renvoie a la connexion", status == 302 and headers.get("location", "").endswith("/login"), headers.get("location", ""))

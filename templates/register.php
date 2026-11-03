@@ -27,4 +27,9 @@
         le message est écrit dans <code>var/outbox</code> et journalise dans
         <code>var/log/mail.log</code>.
     </p>
+
+    <p class="note">
+        Si l'adresse a deja un compte, le mot de passe se reinitialise ici :
+        <a href="<?= attr(url('password')) ?>">Mot de passe oublie ?</a>
+    </p>
 </section>

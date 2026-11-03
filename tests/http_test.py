@@ -2,10 +2,11 @@
 """Test HTTP du front controller, lance dans le conteneur par tests/run.sh.
 
 Un serveur PHP integre est demarre, puis des requetes HTTP reproduisent le
-parcours reel : inscription, lien de verification, connexion, pages, QR en PNG
-(contre-verify par decodage zxing), quota de 10 creations, telechargements STL
-et 3MF, suppressions (jeton, confirmation, compte), CSRF, en-tetes de securite,
-ceremonies WebAuthn avec le faux authenticateur de tests/webauthn_fixture.py.
+parcours reel : inscription, lien de verification, connexion, reinitialisation de
+mot de passe, pages, QR en PNG (contre-verify par decodage zxing), quota de 10
+creations, telechargements STL et 3MF, suppressions (jeton, confirmation, compte),
+CSRF, en-tetes de securite, ceremonies WebAuthn avec le faux authenticateur de
+tests/webauthn_fixture.py.
 
 Le serveur PHP integre joue le role du serveur web de production (Apache ou nginx
 + PHP-FPM) : les fichiers reels sont servis directement, le reste va au front
@@ -137,6 +138,12 @@ def csrf_of(body):
 
 def link_of(body):
     match = re.search(rb"/verify/([0-9a-f]+)", body)
+
+    return match.group(1).decode() if match else ""
+
+
+def reset_link_of(body):
+    match = re.search(rb"/password/reset/([0-9a-f]+)", body)
 
     return match.group(1).decode() if match else ""
 
@@ -539,6 +546,73 @@ def run():
 
     check("session videe apres la suppression du compte",
           status == 302 and headers.get("location", "").endswith("/login"), headers.get("location", ""))
+
+    # 12. Reinitialisation de mot de passe, sur un compte separe : la page ne dit pas si
+    # l'adresse a un compte, le lien est usage unique, et le verou est compte sur la demande.
+    forgotten = client(http.cookiejar.CookieJar())
+
+    status, _, body = post(
+        "/register",
+        {"csrf": csrf_of(get("/register", forgotten)[2]), "email": "oublie@qlip.test", "password": "un-mot-de-passe-long"},
+        forgotten,
+    )
+
+    check("inscription oublie", status == 200, str(status))
+    check("lien de reinitialisation propose sur la page de connexion", b"Mot de passe oublie" in get("/login", forgotten)[2])
+
+    status, _, body = post("/password", {"csrf": csrf_of(get("/password", forgotten)[2]), "email": "oublie@qlip.test"}, forgotten)
+
+    check("demande de reinitialisation", status == 200 and b"Si cette adresse a un compte" in body, str(status))
+
+    link = reset_link_of(body)
+    status, _, body = get("/password/reset/" + link, forgotten)
+
+    check("lien de reinitialisation", link != "" and status == 200 and b'name="password"' in body, link[:16])
+
+    form_csrf = csrf_of(body)
+
+    status, _, body = post("/password/reset/" + link, {"csrf": "mauvais-jeton", "password": "un-mot-de-passe-long"}, forgotten)
+
+    check("CSRF refuse sur la reinitialisation", status == 400, str(status))
+
+    status, _, body = post("/password/reset/" + link, {"csrf": form_csrf, "password": "court"}, forgotten)
+
+    check("mot de passe trop court refuse", status == 200 and b"trop court" in body, str(status))
+    check("le lien n est pas consomme par un refus", get("/password/reset/" + link, forgotten)[0] == 200)
+
+    status, headers, _ = post("/password/reset/" + link, {"csrf": form_csrf, "password": "nouveau-mot-de-passe-long"}, forgotten)
+
+    check("mot de passe change", status == 302 and headers.get("location", "").endswith("/dashboard"), headers.get("location", ""))
+
+    # La session a ete regeneree par le changement : le jeton du formulaire ne vaut plus, on
+    # relit celui de la page pour rejouer le lien.
+    current_csrf = csrf_of(get("/password", forgotten)[2])
+
+    check("lien usage unique", post("/password/reset/" + link, {"csrf": current_csrf, "password": "un-mot-de-passe-long"}, forgotten)[0] == 400)
+
+    status, headers, _ = post("/login", {"csrf": current_csrf, "email": "oublie@qlip.test", "password": "nouveau-mot-de-passe-long"}, forgotten)
+
+    check("connexion avec le nouveau mot de passe", status == 302, headers.get("location", ""))
+
+    # La connexion regenere la session : le jeton est relu apres.
+    logged_csrf = csrf_of(get("/password", forgotten)[2])
+
+    check("ancien mot de passe refuse", post("/login", {"csrf": logged_csrf, "email": "oublie@qlip.test", "password": "un-mot-de-passe-long"}, forgotten)[0] == 401)
+
+    status, _, body = post("/password", {"csrf": logged_csrf, "email": "sans-compte@qlip.test"}, forgotten)
+
+    check("reponse identique pour une adresse sans compte",
+          status == 200 and b"Si cette adresse a un compte" in body and b"/password/reset/" not in body,
+          str(body)[:60])
+
+    # Verou : 5 demandes par heure et par navigateur, sur une session separee.
+    throttle = client(http.cookiejar.CookieJar())
+    last = 0
+
+    for _ in range(6):
+        last = post("/password", {"csrf": csrf_of(get("/password", throttle)[2]), "email": "oublie@qlip.test"}, throttle)[0]
+
+    check("verou de reinitialisation apres 5 demandes", last == 429, str(last))
 
 
 def main():

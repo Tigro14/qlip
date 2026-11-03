@@ -8,6 +8,11 @@ use Qlip\Db;
 
 final class Users
 {
+    private const MIN_PASSWORD = 10;
+
+    /** Validite d un jeton de reinitialisation : 24 h, usage unique. */
+    private const RESET_TTL = 86400;
+
     private Db $db;
     private Mailer $mailer;
     private string $baseUrl;
@@ -34,9 +39,7 @@ final class Users
             throw new \InvalidArgumentException('Adresse email invalide.');
         }
 
-        if (strlen($password) < 10) {
-            throw new \InvalidArgumentException('Mot de passe trop court (10 caracteres minimum).');
-        }
+        $this->checkPassword($password);
 
         $existing = $this->findByEmail($email);
 
@@ -99,6 +102,122 @@ final class Users
         $this->audit((int) $row['user_id'], 'verify', (string) $user['email']);
 
         return $user;
+    }
+
+    /**
+     * Demande de reinitialisation : un jeton est gene et envoye par email.
+     *
+     * La reponse ne dit pas si l'adresse a un compte : elle est la meme dans les deux cas,
+     * sinon le formulaire servirait a dresser la liste des comptes. Avec le transport
+     * outbox le lien est quand meme affiche, parce que c'est un transport de developpement
+     * (les tests en ont besoin) : il ne cache pas l'existence du compte.
+     *
+     * @return array{email: string, user: array<string, mixed>|null, token: string, link: string, mail: array<string, string>|null}
+     */
+    public function requestReset(string $email): array
+    {
+        $email = strtolower(trim($email));
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new \InvalidArgumentException('Adresse email invalide.');
+        }
+
+        $user = $this->findByEmail($email);
+
+        if ($user === null) {
+            // Rien n'est envoye, mais la reponse est identique : le compte n'existe pas,
+            // et la trace le dit avec l'adresse dans le detail (user_id reste NULL).
+            $this->audit(null, 'reset_request', 'demande pour une adresse sans compte : ' . $email);
+
+            return ['email' => $email, 'user' => null, 'token' => '', 'link' => '', 'mail' => null];
+        }
+
+        $token = random_token(32);
+
+        $this->db->exec(
+            'INSERT INTO reset_tokens (user_id, token, created_at) VALUES (:user_id, :token, :created_at)',
+            [':user_id' => (int) $user['id'], ':token' => $token, ':created_at' => now()]
+        );
+
+        $link = $this->baseUrl . '/password/reset/' . $token;
+
+        $mail = $this->mailer->send(
+            $email,
+            'Reinitialisation du mot de passe (Qlip)',
+            "Clique sur ce lien pour definir un nouveau mot de passe :\n\n{$link}\n\n"
+                . "Le lien est valable 24 h et ne peut etre utilise qu'une fois. "
+                . "Si tu n'as pas demande cette reinitialisation, ignore le message : le mot de passe ne change pas."
+        );
+
+        $this->audit((int) $user['id'], 'reset_request', 'demande de reinitialisation');
+
+        return ['email' => $email, 'user' => $user, 'token' => $token, 'link' => $link, 'mail' => $mail];
+    }
+
+    /**
+     * Jeton de reinitialisation, controle : usage unique et 24 h.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function resetToken(string $token): ?array
+    {
+        $row = $this->db->one('SELECT * FROM reset_tokens WHERE token = :token LIMIT 1', [':token' => $token]);
+
+        if ($row === null || $row['used_at'] !== null) {
+            return null;
+        }
+
+        if (strtotime((string) $row['created_at']) < time() - self::RESET_TTL) {
+            return null;
+        }
+
+        return $row;
+    }
+
+    /**
+     * Nouveau mot de passe. Le jeton est consomme, et tous les jetons du compte sont fermes :
+     * un lien envoye la semaine precedente ne doit plus pouvoir changer le mot de passe.
+     *
+     * Le lien est envoye a la boite et usage unique : s'il est utilise, le controle de la
+     * boite est prouve, ce qui vaut exactement la verification d'email. Un compte encore
+     * non active est donc active par la reinitialisation, sinon il n'aurait plus aucun moyen
+     * d'entrer (le lien de verification est usage unique lui aussi).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function resetPassword(string $token, string $password): ?array
+    {
+        $row = $this->resetToken($token);
+
+        if ($row === null) {
+            return null;
+        }
+
+        $this->checkPassword($password);
+
+        $user = $this->find((int) $row['user_id']);
+
+        if ($user === null) {
+            return null;
+        }
+
+        $this->db->exec(
+            'UPDATE users SET password_hash = :hash, verified_at = COALESCE(verified_at, :verified_at) WHERE id = :id',
+            [
+                ':hash' => password_hash($password, PASSWORD_DEFAULT),
+                ':verified_at' => now(),
+                ':id' => (int) $user['id'],
+            ]
+        );
+
+        $this->db->exec(
+            'UPDATE reset_tokens SET used_at = :used_at WHERE user_id = :user_id AND used_at IS NULL',
+            [':used_at' => now(), ':user_id' => (int) $user['id']]
+        );
+
+        $this->audit((int) $user['id'], 'reset', 'mot de passe change par le lien de reinitialisation');
+
+        return $this->find((int) $user['id']);
     }
 
     /**
@@ -179,6 +298,14 @@ final class Users
         $list = array_map('trim', explode(',', \env('QLIP_ADMIN_EMAILS')));
 
         return in_array(strtolower(trim($email)), $list, true);
+    }
+
+    /** Le controle de taille se fait cote serveur : le minlength d un formulaire n est pas une protection. */
+    private function checkPassword(string $password): void
+    {
+        if (strlen($password) < self::MIN_PASSWORD) {
+            throw new \InvalidArgumentException('Mot de passe trop court (' . self::MIN_PASSWORD . ' caracteres minimum).');
+        }
     }
 
     public function audit(?int $userId, string $action, string $detail = ''): void

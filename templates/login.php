@@ -27,6 +27,7 @@
 
     <p class="note">
         Le compte doit avoir verifie son email.
+        <a href="<?= attr(url('password')) ?>">Mot de passe oublie ?</a>
         <?php if ($user === null): ?>
             <a href="<?= attr(url('register')) ?>">Inscription</a>
         <?php endif; ?>

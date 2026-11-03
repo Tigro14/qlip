@@ -6,7 +6,8 @@ Consignes pour travailler sur Qlip.
 
 Application PHP + SQLite locale : mini pages de contact, QR codes, badges porte-cles
 imprimables en STL/3MF, page d'administration protegee par YubiKey (WebAuthn), inscription
-avec email verifie, 10 creations de badge par jour et par compte, suppression definitive
+avec email verifie, reinitialisation de mot de passe par lien envoye par email (usage unique,
+24 h), 10 creations de badge par jour et par compte, suppression definitive
 (page, badge, compte) avec confirmation et trace dans `audit_log`.
 
 ## Contraintes qui ne changent pas
@@ -63,6 +64,10 @@ fichier, dans le namespace `Qlip\...`.
   d'identite ;
 - threpse de connexion : 8 tentatives par session, puis verrou de 300 s ;
 - email verifie obligatoire : tableau de bord et creation de badge renvoient 403 sinon ;
+- reinitialisation de mot de passe : la reponse est la meme quand l'adresse a un compte ou
+  non (sinon le formulaire dresse la liste des comptes), 5 demandes par heure et par session
+  comptees sur la demande, lien usage unique et valable 24 h, jetons du compte fermes quand le
+  mot de passe change, POST avec jeton CSRF, taille minimale controlee cote serveur ;
 - suppression definitive : POST seulement, jeton CSRF, confirmation explicite, mot de passe
   pour le compte, et controle d appartenance (proprietaire ou administrateur). Une ligne
   d audit est ecrite pour chaque suppression ;
@@ -160,6 +165,10 @@ utilise le MTA local.
 - Routes de suppression : POST seulement. `GET /badges/{id}/{format}` (telechargement)
   aurait attrape `delete` comme un format, donc la liste des formats est fermee a `stl`
   et `3mf` : un autre nom rend 404.
+- Le lien de reinitialisation active un compte encore non verifie : le jeton est envoye a la
+  boite et usage unique, donc le lire prouve le controle de la boite, ce qui vaut la
+  verification d'email. Sans lui, un compte non active n'aurait plus aucun moyen d'entrer
+  (le lien de verification est usage unique lui aussi). Ce n'est pas une faille a corriger.
 - Quota : il porte sur les evenements de creation dans `audit_log` (`action = 'badge'`),
   pas sur les lignes qui restent. Les actions de suppression ont des noms distincts
   (`badge_supprime`, `page_supprimee`, `compte_supprime`) pour ne pas polluer le comptage.

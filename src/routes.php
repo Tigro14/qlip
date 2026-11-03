@@ -30,6 +30,11 @@ function qlip_routes(App $app): Router
     $router->post('/register', fn (Request $request): Response => $auth->register($request));
     $router->get('/verify/{token}', fn (Request $request): Response => $auth->verify($request));
 
+    $router->get('/password', fn (Request $request): Response => $auth->showForgot($request));
+    $router->post('/password', fn (Request $request): Response => $auth->forgot($request));
+    $router->get('/password/reset/{token}', fn (Request $request): Response => $auth->showReset($request));
+    $router->post('/password/reset/{token}', fn (Request $request): Response => $auth->reset($request));
+
     $router->get('/login', fn (Request $request): Response => $auth->showLogin($request));
     $router->post('/login', fn (Request $request): Response => $auth->login($request));
     $router->post('/logout', fn (Request $request): Response => $auth->logout($request));

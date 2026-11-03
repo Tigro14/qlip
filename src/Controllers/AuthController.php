@@ -9,12 +9,16 @@ use Qlip\App\Request;
 use Qlip\App\Response;
 
 /**
- * Inscription, verification d'email, connexion, deconnexion.
+ * Inscription, verification d'email, connexion, reinitialisation de mot de passe,
+ * deconnexion.
  */
 final class AuthController
 {
     private const MAX_ATTEMPTS = 8;
     private const LOCK_SECONDS = 300;
+
+    private const MAX_RESET_REQUESTS = 5;
+    private const RESET_WINDOW = 3600;
 
     private App $app;
 
@@ -79,6 +83,119 @@ final class AuthController
             'title' => 'Compte active',
             'user' => $this->app->currentUser(),
         ]));
+    }
+
+    public function showForgot(Request $request): Response
+    {
+        return Response::html($this->app->view->render('forgot.php', [
+            'title' => 'Mot de passe oublie',
+            'user' => $this->app->currentUser(),
+            'csrf' => $this->app->session->token(),
+            'locked' => $this->resetLockedUntil(),
+            'flash' => $this->app->takeFlash(),
+        ]));
+    }
+
+    /**
+     * Demande de reinitialisation. La reponse ne dit pas si l'adresse a un compte, et le
+     * verou est compte sur la demande (pas sur l envoi) : une adresse sans compte consomme
+     * la meme part, sinon le formulaire servirait a tester les adresses sans limite.
+     */
+    public function forgot(Request $request): Response
+    {
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        $locked = $this->resetLockedUntil();
+
+        if ($locked > time()) {
+            return Response::html('Trop de demandes. Recomence dans ' . ($locked - time()) . ' secondes.', 429);
+        }
+
+        $this->countResetRequest();
+
+        try {
+            $result = $this->app->users->requestReset($request->input('email'));
+        } catch (\Throwable $error) {
+            return Response::html($this->app->view->render('forgot.php', [
+                'title' => 'Mot de passe oublie',
+                'user' => $this->app->currentUser(),
+                'csrf' => $this->app->session->token(),
+                'locked' => $this->resetLockedUntil(),
+                'error' => $error->getMessage(),
+            ]));
+        }
+
+        $found = $result['user'] !== null;
+        $mail = $result['mail'];
+
+        return Response::html($this->app->view->render('reset_sent.php', [
+            'title' => 'Reinitialisation demandee',
+            'user' => $this->app->currentUser(),
+            'email' => $result['email'],
+            'found' => $found,
+            'link' => $result['link'],
+            'transport' => $this->app->mailer->transport(),
+            'path' => $mail === null ? '' : (string) $mail['path'],
+            'ok' => $mail === null || (bool) $mail['ok'],
+            'error' => $mail === null ? '' : (string) $mail['error'],
+        ]));
+    }
+
+    public function showReset(Request $request): Response
+    {
+        $token = $request->input('token');
+
+        if ($this->app->users->resetToken($token) === null) {
+            return Response::html('Lien de reinitialisation invalide ou expire.', 400);
+        }
+
+        return Response::html($this->app->view->render('reset.php', [
+            'title' => 'Nouveau mot de passe',
+            'user' => $this->app->currentUser(),
+            'csrf' => $this->app->session->token(),
+            'token' => $token,
+        ]));
+    }
+
+    /**
+     * Nouveau mot de passe. Le jeton est consomme par le service, usage unique ; un lien
+     * deja utilise, ou plus vieux que 24 h, rend 400. La session est regeneree parce que
+     * l'identite change.
+     */
+    public function reset(Request $request): Response
+    {
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        $token = $request->input('token');
+
+        try {
+            $user = $this->app->users->resetPassword($token, $request->input('password'));
+        } catch (\Throwable $error) {
+            // Un mot de passe trop court ne consomme pas le jeton : le lien est encore
+            // valable, on peut reprendre le formulaire.
+            return Response::html($this->app->view->render('reset.php', [
+                'title' => 'Nouveau mot de passe',
+                'user' => $this->app->currentUser(),
+                'csrf' => $this->app->session->token(),
+                'token' => $token,
+                'error' => $error->getMessage(),
+            ]));
+        }
+
+        if ($user === null) {
+            return Response::html('Lien de reinitialisation invalide ou expire.', 400);
+        }
+
+        $this->app->session->regenerate();
+        $this->app->session->set('user_id', (int) $user['id']);
+
+        $this->app->flash('Mot de passe change pour ' . $user['email'] . '.');
+
+        return Response::redirect($this->app->url('dashboard'));
     }
 
     public function showLogin(Request $request): Response
@@ -191,6 +308,41 @@ final class AuthController
     private function lockedUntil(): int
     {
         return (int) $this->app->session->get('locked_until', 0);
+    }
+
+    /**
+     * Fenetre glissante des demandes de reinitialisation : 5 par heure et par session.
+     *
+     * @return list<int>
+     */
+    private function resetWindow(): array
+    {
+        $sent = $this->app->session->get('reset_sent', []);
+
+        if (!is_array($sent)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map('intval', $sent),
+            static fn (int $at): bool => $at > time() - self::RESET_WINDOW
+        ));
+    }
+
+    /** Le verou n est pas une duree posee : il tombe quand la plus vieille demande sort de la fenetre. */
+    private function resetLockedUntil(): int
+    {
+        $window = $this->resetWindow();
+
+        return count($window) >= self::MAX_RESET_REQUESTS ? $window[0] + self::RESET_WINDOW : 0;
+    }
+
+    private function countResetRequest(): void
+    {
+        $window = $this->resetWindow();
+        $window[] = time();
+
+        $this->app->session->set('reset_sent', $window);
     }
 
 }

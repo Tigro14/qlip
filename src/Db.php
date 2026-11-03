@@ -103,6 +103,14 @@ final class Db
                 used_at TEXT
             )',
 
+            'CREATE TABLE IF NOT EXISTS reset_tokens (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                used_at TEXT
+            )',
+
             'CREATE TABLE IF NOT EXISTS webauthn_credentials (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
