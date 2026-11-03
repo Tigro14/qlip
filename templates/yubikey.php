@@ -24,7 +24,7 @@
          data-csrf="<?= e($csrf ?? '') ?>"
          data-rp="<?= e($rpId ?? '') ?>"
          data-base="<?= attr(url('')) ?>"
-         data-user="<?= e(json_field($user === null ? null : ['id' => base64url_encode((string) $user['id']), 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
+         data-user="<?= e(json_field($user === null ? null : ['id' => user_handle((int) $user['id']), 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
         <?php if ($user !== null && (int) ($user['is_admin'] ?? 0) === 1): ?>
             <button type="button" data-action="register">Enregistrer la YubiKey</button>
         <?php endif; ?>

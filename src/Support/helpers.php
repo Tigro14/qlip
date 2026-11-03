@@ -74,6 +74,18 @@ function random_token(int $bytes = 32): string
 }
 
 /**
+ * Handle d utilisateur transmis au navigateur. La spec demande au moins 16 octets pour
+ * PublicKeyCredentialUserEntity.id : un id de 1 octet est refuse par certains moteurs
+ * (NotAllowedError). L id est ecrit sur 16 octets, entier non signe big-endian complete par
+ * des zeros, donc il reste stable pour un compte. Il part en base64url comme les autres
+ * tampons, parce que le champ est un tampon et pas une chaine.
+ */
+function user_handle(int $id): string
+{
+    return base64url_encode(str_pad(pack('J', $id), 16, "\0", STR_PAD_LEFT));
+}
+
+/**
  * URL de l'application (base configurable). Utilisee dans les templates.
  */
 function url(string $path = ''): string

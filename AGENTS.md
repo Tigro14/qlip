@@ -161,7 +161,8 @@ utilise le MTA local.
   tampons echanges en base64url. Formats d'attestation acceptes : `none` et `packed`
   (auto-attestation), la racine est optionnelle. Cles du map CBOR d'attestation : `fmt`,
   `attStmt`, `authData` ; `attAuthData` n'existe pas dans la spec, donc un harnais qui
-  l'ecrit ne peut pas voir l'erreur devant un vrai navigateur.
+  l'ecrit ne peut pas voir l'erreur devant un vrai navigateur. Handle d'utilisateur : 16
+  octets minimum (la spec), donc l'id est ecrit en big-endian complete par des zeros.
 - `session_status()` peut mentir avec un binaire PHP statique : la logique s'appuie sur
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et

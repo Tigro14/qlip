@@ -13,7 +13,7 @@
          data-csrf="<?= e($csrf ?? '') ?>"
          data-rp="<?= e($rpId ?? '') ?>"
          data-base="<?= attr(url('')) ?>"
-         data-user="<?= e(json_field(['id' => base64url_encode((string) $user['id']), 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
+         data-user="<?= e(json_field(['id' => user_handle((int) $user['id']), 'name' => $user['email'], 'displayName' => $user['email']])) ?>">
 
         <button type="button" data-action="register">Enregistrer une YubiKey</button>
         <button type="button" data-action="assert">Presente la YubiKey</button>

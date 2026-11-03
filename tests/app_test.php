@@ -451,7 +451,8 @@ if (!is_array($fixtures)) {
     // L identite transmise au navigateur est un tampon : le champ id de
     // PublicKeyCredentialUserEntity n est pas une chaine. Passe tel quel en JSON il reste une
     // chaine, et credentials.create refuse la ceremonie. Il est donc transmis en base64url,
-    // comme le reste des tampons echanges avec le navigateur.
+    // comme le reste des tampons echanges avec le navigateur. La spec demande au moins 16
+    // octets pour ce tampon : un id de 1 octet est refuse par certains moteurs.
     preg_match('/data-user="([^"]+)"/', $response->body(), $match);
     $raw = html_entity_decode((string) ($match[1] ?? ''), ENT_QUOTES, 'UTF-8');
     $entity = json_decode($raw, true);
@@ -462,7 +463,13 @@ if (!is_array($fixtures)) {
         $handle = '';
     }
 
-    check('id d utilisateur transmis en base64url', $handle === (string) $admin['id'], $raw);
+    check('id d utilisateur transmis en base64url', $handle !== '', $raw);
+    check('handle d utilisateur : 16 octets minimum', strlen($handle) >= 16, $raw);
+    check(
+        'handle d utilisateur : le compte est retrouvable',
+        (int) hexdec(bin2hex(substr($handle, -8))) === (int) $admin['id'],
+        $raw
+    );
 
     $response = $send('GET', '/admin');
 
