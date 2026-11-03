@@ -7,18 +7,16 @@ require __DIR__ . '/../src/autoload.php';
 use Qlip\Webauthn\Cbor;
 
 /**
- * Sonde CTAP2 : lit authenticatorGetInfo d'une cle FIDO2 sur /dev/hidraw.
- *
- * Elle repond a ce que la suite ne peut pas verifier, parce que la suite n'a pas de vrai
- * authenticateur : la cle est-elle vue comme un authenticateur CTAP (et pas seulement comme
- * un lecteur de cartes), et peut-elle faire la verification utilisateur demandee par
- * l'app (userVerification 'required').
+ * Sonde CTAP : lit ce que la suite ne peut pas verifier, parce que la suite n'a pas de vrai
+ * authenticateur : la cle est-elle vue comme un authenticateur CTAP (et pas seulement comme un
+ * lecteur de cartes), parle-t-elle CTAP2 (CBOR) ou seulement CTAP1 (U2F), et peut-elle faire la
+ * verification utilisateur demandee par l'app (userVerification 'required').
  *
  * La cle doit etre branchee sur la machine qui execute le script. Le device est en acces root
  * (crw-------), ou ouvert par une regle udev seulement a des utilisateurs systeme (sssd,
- * gdm-greeter pour la verification PAM) : un utilisateur normal doit passer par root. La seule
- * commande envoyee est une lecture, authenticatorGetInfo, rien n'est ecrit sur la cle. Le
- * script n'est pas lance par tests/run.sh, il demande du materiel.
+ * gdm-greeter pour la verification PAM) : un utilisateur normal doit passer par root. Les seules
+ * commandes envoyees sont des lectures (handshake, authenticatorGetInfo, version U2F), rien n'est
+ * ecrit sur la cle. Le script n'est pas lance par tests/run.sh, il demande du materiel.
  *
  *   sudo php tests/ctap_probe.php
  *   sudo php tests/ctap_probe.php /dev/hidraw5
@@ -29,6 +27,12 @@ use Qlip\Webauthn\Cbor;
  * des octets lus, et il faut un zero au debut de ce qu on ecrit. Le descripteur est donc lu, et
  * la trame recue est imprimee en octets bruts : sans elle, une reponse sans echo du nonce ne
  * permet pas de distinguer une cle CTAP1 d une erreur de tramage.
+ *
+ * Trame d initialisation : la taille annoncee est BCNTH + BCNTL, soit 2 octets, et le payload
+ * commence a l offset 7. C est la meme forme pour CTAPHID et pour U2FHID. Une implementation qui
+ * ecrit 3 octets fait lire une taille de 0 par la cle, qui repond une erreur de longueur : cette
+ * erreur dit ce que le script a ecrit, pas ce que la cle sait faire. La sonde ecrit la forme de
+ * la spec et lit la reponse dans les deux formes, pour ne pas confondre les deux.
  */
 
 const REPORT_SIZE = 64;
@@ -36,27 +40,34 @@ const REPORT_SIZE = 64;
 /** Le bit haut du byte de command distingue une trame d initialisation d une continuation. */
 const TYPE_INIT = 0x80;
 
+/** Largeur du champ de taille d une trame d initialisation : BCNTH + BCNTL. */
+const LEN_SPEC = 2;
+const LEN_ALT = 3;
+
 const CMD_INIT = 0x06;
+
+/** CTAPHID_MSG porte un message CTAP1 : le premier octet du payload est la commande U2F. */
+const CMD_MSG = 0x03;
+
 const CMD_CBOR = 0x10;
 const CMD_ERROR = 0x3F;
+
+/** Commande U2F envoyee dans CTAPHID_MSG : la version, la reponse est "U2F_V2". */
+const U2F_VERSION = 0x03;
 
 /** Premier byte du payload d un CTAPHID_CBOR : authenticatorGetInfo. */
 const CTAP_GET_INFO = 0x02;
 
 const BROADCAST = "\xff\xff\xff\xff";
 
-/** Methodes de verification utilisateur (key 9 du GetInfo). */
-const UV_METHODS = [
-    1 => 'presence (toucher la cle)',
-    2 => 'biometrie interne',
-    3 => 'biometrie externe',
-    4 => 'deblocage par motif',
-    5 => 'deblocage par motif externe',
-    6 => 'connaissance interne (PIN)',
-    7 => 'connaissance externe (PIN)',
-];
+/** Drapeaux de capabilities de la reponse CTAPHID_INIT. */
+const CAP_WINK = 0x01;
+const CAP_CBOR = 0x04;
 
-/** Codes d erreur CTAPHID (le premier octet du payload d une reponse CTAPHID_ERROR). */
+/** Le drapeau NMSG est mis quand la cle ne fait PAS CTAPHID_MSG, donc quand elle ne fait pas CTAP1. */
+const CAP_NMSG = 0x08;
+
+/** Codes d erreur du transport HID, les memes pour CTAP1 et CTAP2. */
 const CTAPHID_ERRORS = [
     0x01 => 'commande invalide',
     0x02 => 'payload invalide',
@@ -67,6 +78,17 @@ const CTAPHID_ERRORS = [
     0x0A => 'verrou demande',
     0x0B => 'canal invalide',
     0x7F => 'autre',
+];
+
+/** Methodes de verification utilisateur (key 9 du GetInfo). */
+const UV_METHODS = [
+    1 => 'presence (toucher la cle)',
+    2 => 'biometrie interne',
+    3 => 'biometrie externe',
+    4 => 'deblocage par motif',
+    5 => 'deblocage par motif externe',
+    6 => 'connaissance interne (PIN)',
+    7 => 'connaissance externe (PIN)',
 ];
 
 $failures = 0;
@@ -90,6 +112,11 @@ function hex(string $value): string
 function byte(int $value): string
 {
     return '0x' . str_pad(dechex($value), 2, '0', STR_PAD_LEFT);
+}
+
+function printable(string $value): string
+{
+    return preg_match('/^[ -~]+$/', $value) === 1 ? $value : '';
 }
 
 /**
@@ -163,10 +190,14 @@ function send($handle, string $cid, int $cmd, string $payload, int $report): voi
 
     // Le premier octet est l identifiant de rapport : 0 quand le device n en a pas.
     $frame = chr($report) . $cid . chr($cmd | TYPE_INIT)
-        . chr(($size >> 16) & 255) . chr(($size >> 8) & 255) . chr($size & 255)
+        . chr(($size >> 8) & 255) . chr($size & 255)
         . $payload;
 
-    fwrite($handle, str_pad($frame, REPORT_SIZE, "\0"));
+    $frame = str_pad($frame, REPORT_SIZE, "\0");
+
+    echo '  trame envoyee : ', hex($frame), PHP_EOL;
+
+    fwrite($handle, $frame);
 }
 
 function receive($handle, int $seconds): ?string
@@ -200,38 +231,66 @@ function receive($handle, int $seconds): ?string
  * d initialisation est 0xbf, pas 0x3f. Le code est donc compare sans le drapeau, et le drapeau
  * est garde separement.
  *
- * @return array{cid: string, init: bool, cmd: int, size: int, payload: string}|null
+ * La taille est lue sur $width octets, la trame etant lisible des deux façons quand le champ fait
+ * 2 octets et que la valeur tient sur 3. La lecture est retenue quand la taille annoncee tient
+ * dans la trame : une taille de 259 annoncee dans une trame de 64 octets remplie de zeros ne
+ * peut pas etre la bonne.
+ *
+ * @return array{cid: string, init: bool, cmd: int, size: int, payload: string, fits: bool}|null
  */
-function parse(string $frame, int $skip): ?array
+function parse(string $frame, int $skip, int $width): ?array
 {
-    if (strlen($frame) < $skip + 8) {
+    if (strlen($frame) < $skip + 5 + $width) {
         return null;
     }
 
     $header = ord($frame[$skip + 4]);
-    $size = (ord($frame[$skip + 5]) << 16) + (ord($frame[$skip + 6]) << 8) + ord($frame[$skip + 7]);
+    $size = 0;
+
+    for ($i = 0; $i < $width; $i++) {
+        $size = ($size << 8) + ord($frame[$skip + 5 + $i]);
+    }
+
+    $data = substr($frame, $skip + 5 + $width);
 
     return [
         'cid' => substr($frame, $skip, 4),
         'init' => ($header & TYPE_INIT) === TYPE_INIT,
         'cmd' => $header & 0x7F,
         'size' => $size,
-        'payload' => substr($frame, $skip + 8, $size),
+        'payload' => substr($data, 0, $size),
+        'fits' => $size <= strlen($data),
     ];
+}
+
+function print_reading(array $try, int $skip, int $width): void
+{
+    echo '  relu avec le decalage ', $skip, ' et la taille sur ', $width, ' octets : canal ', hex($try['cid']),
+        ' balise ', byte($try['cmd']), ' (trame ', $try['init'] ? 'd initialisation' : 'de continuation', ')',
+        ', taille annoncee ', $try['size'],
+        $try['fits'] ? '' : ' (ne tient pas dans la trame)',
+        ', payload ', hex($try['payload']), PHP_EOL;
+
+    if ($try['cmd'] === CMD_ERROR && $try['payload'] !== '') {
+        $code = ord($try['payload'][0]);
+
+        echo '    balise erreur : code ', byte($code), ' ', CTAPHID_ERRORS[$code] ?? 'code inconnu', PHP_EOL;
+    }
 }
 
 /** Lit une reponse complete : la taille annoncee peut depasser une trame. */
 function read_answer($handle, int $seconds, int $skip): ?array
 {
     $frame = receive($handle, $seconds);
-    $answer = parse((string) $frame, $skip);
+    $answer = parse((string) $frame, $skip, LEN_SPEC);
 
     if ($answer === null) {
         return null;
     }
 
     // Une continuation a la meme forme, avec le numero de sequence a la place de la taille.
-    // Le numero n est pas verifie : les continuations arrivent dans l ordre.
+    // Le numero n est pas verifie : les continuations arrivent dans l ordre. Le payload commence
+    // a l offset 5, la largeur du champ de taille ne change rien ici.
     while (strlen($answer['payload']) < $answer['size']) {
         $next = receive($handle, $seconds);
 
@@ -243,6 +302,23 @@ function read_answer($handle, int $seconds, int $skip): ?array
     }
 
     return $answer;
+}
+
+function capabilities(int $flags): string
+{
+    $names = [];
+
+    if (($flags & CAP_WINK) === CAP_WINK) {
+        $names[] = 'wink';
+    }
+
+    $names[] = ($flags & CAP_CBOR) === CAP_CBOR ? 'CBOR (CTAP2)' : 'CBOR non annonce';
+
+    if (($flags & CAP_NMSG) === CAP_NMSG) {
+        $names[] = 'CTAPHID_MSG non fait (donc pas de CTAP1)';
+    }
+
+    return implode(', ', $names);
 }
 
 $device = $argv[1] ?? null;
@@ -290,7 +366,8 @@ check('device accessible', true, $device);
 
 $skip = $report === null ? 0 : 1;
 
-// CTAPHID_INIT sur le canal de diffusion : la cle attribue le canal.
+// CTAPHID_INIT sur le canal de diffusion : la cle attribue le canal. La taille est ecrite sur
+// 2 octets, comme la spec.
 $nonce = random_bytes(8);
 send($handle, BROADCAST, CMD_INIT, $nonce, $report ?? 0);
 $frame = receive($handle, 10);
@@ -299,68 +376,114 @@ if ($frame === null) {
     exit(1);
 }
 
-// Le descripteur dit quelle forme attendre, et l echo du nonce la confirme. Les deux sont
-// testees sur la trame recue : si aucune ne fait l echo, ce n est pas une question de tramage.
-$answer = null;
+// Les formes testees sont le decalage (avec ou sans identifiant de rapport) et la largeur du
+// champ de taille. L echo du nonce montre la bonne.
+$readings = [];
 
 foreach ([$skip, $skip === 0 ? 1 : 0] as $form) {
-    $try = parse($frame, $form);
+    foreach ([LEN_SPEC, LEN_ALT] as $width) {
+        $try = parse($frame, $form, $width);
 
-    if ($try !== null && $try['init'] && $try['cmd'] === CMD_INIT && strlen($try['payload']) >= 16 && substr($try['payload'], 0, 8) === $nonce) {
+        if ($try === null) {
+            continue;
+        }
+
+        $try['form'] = $form;
+        $try['width'] = $width;
+        $readings[] = $try;
+
+        print_reading($try, $form, $width);
+    }
+}
+
+$answer = null;
+
+foreach ($readings as $try) {
+    if ($try['init'] && $try['cmd'] === CMD_INIT && strlen($try['payload']) >= 16 && substr($try['payload'], 0, 8) === $nonce) {
         $answer = $try;
-        $skip = $form;
+        $skip = $try['form'];
 
         break;
     }
 }
 
 if ($answer === null) {
-    $refused = false;
+    $consistent = null;
 
-    foreach ([0, 1] as $form) {
-        $try = parse($frame, $form);
-
-        if ($try === null) {
-            continue;
-        }
-
-        echo '  relu avec le decalage ', $form, ' : canal ', hex($try['cid']),
-            ' balise ', byte($try['cmd']), ' (trame ', $try['init'] ? 'd initialisation' : 'de continuation', ')',
-            ', taille annoncee ', $try['size'], ', payload ', hex($try['payload']), PHP_EOL;
-
-        if ($try['cmd'] === CMD_ERROR && $try['payload'] !== '') {
-            $code = ord($try['payload'][0]);
-
-            echo '    balise erreur : code lu ', byte($code), ' ', CTAPHID_ERRORS[$code] ?? 'code inconnu', PHP_EOL;
-
-            if ($try['size'] > strlen($frame) && strlen($frame) > $form + 7) {
-                $alt = ord($frame[$form + 7]);
-
-                echo '    la taille annoncee (', $try['size'], ') ne tient pas dans une trame de ', REPORT_SIZE, ' octets', PHP_EOL;
-                echo '    si BCNT est ecrit sur 2 octets, le code est ', byte($alt), ' ', CTAPHID_ERRORS[$alt] ?? 'code inconnu', PHP_EOL;
-            }
-
-            $refused = true;
+    foreach ($readings as $try) {
+        if ($try['cmd'] === CMD_ERROR && $try['payload'] !== '' && $try['fits']) {
+            $consistent = $try;
         }
     }
 
-    // Le canal de diffusion est repris dans la reponse : le tramage est donc correct, et la
-    // cle a refuse le handshake. CTAPHID_INIT est obligatoire sur le transport HID pour un
-    // authenticateur CTAP2, donc un refus ici veut dire que cette interface ne fait pas CTAP2.
-    check('CTAPHID_INIT', false, $refused
-        ? 'reponse d erreur au lieu de l echo du nonce : la cle refuse le handshake, donc pas de CTAP2 sur cette interface'
-        : 'pas d echo du nonce, et la trame n est pas lisible comme une trame d initialisation');
+    if ($consistent === null) {
+        check('CTAPHID_INIT', false, 'pas d echo du nonce, et aucune lecture de la trame ne donne une trame d initialisation');
+        exit(1);
+    }
+
+    $code = ord($consistent['payload'][0]);
+
+    echo '    lecture retenue : la taille sur ', $consistent['width'], ' octets, ',
+        $consistent['size'], ' octet(s) annonce(s), ce qui tient dans la trame', PHP_EOL;
+
+    if ($code === 0x03) {
+        echo '    la sonde ecrit la taille sur 2 octets, comme la spec : une erreur de longueur ici veut dire que ', PHP_EOL;
+        echo '    la cle lit le champ sur 3 octets, ou refuse la taille annoncee pour la commande INIT (8 octets)', PHP_EOL;
+    }
+
+    // Le canal de diffusion est repris dans la reponse : le tramage est donc correct, et la cle a
+    // repondu. Ce que la reponse dit depend de ce qu elle a lu dans le champ de taille.
+    check('CTAPHID_INIT', false, 'reponse d erreur ' . byte($code) . ' (' . (CTAPHID_ERRORS[$code] ?? 'code inconnu') . ')');
     exit(1);
 }
 
-echo '  forme de trame retenue : ', $skip === 0 ? 'sans identifiant de rapport' : 'avec identifiant de rapport', PHP_EOL;
+echo '  forme de trame retenue : ', $skip === 0 ? 'sans identifiant de rapport' : 'avec identifiant de rapport',
+    ', taille sur ', $answer['width'], ' octets', PHP_EOL;
+
+check('CTAPHID_INIT', true, 'echo du nonce : le tramage est correct');
 
 $cid = substr($answer['payload'], 8, 4);
-$capabilities = ord($answer['payload'][strlen($answer['payload']) - 1]);
+
+// Le dernier octet est le drapeau de capabilities : la reponse peut etre plus longue que 16 octets
+// pour laisser de la place aux extensions.
+$flags = ord($answer['payload'][strlen($answer['payload']) - 1]);
 
 echo '  canal : ', hex($cid), PHP_EOL;
 echo '  version interface : ', ord($answer['payload'][12]), '.', ord($answer['payload'][13]), PHP_EOL;
-echo '  capabilities : ', byte($capabilities) . ' (' . (($capabilities & 0x02) === 0x02 ? 'CTAP1' : 'CTAP1 non annonce') . ')', PHP_EOL;
+echo '  capabilities : ', byte($flags) . ' (' . capabilities($flags) . ')', PHP_EOL;
+
+if (($flags & CAP_CBOR) !== CAP_CBOR) {
+    // Pas de CBOR : la cle ne peut pas repondre a un message CTAP2, donc pas de ceremonie WebAuthn
+    // par cette interface. La version U2F se lit par CTAPHID_MSG, qui est une lecture.
+    send($handle, $cid, CMD_MSG, chr(U2F_VERSION), $report ?? 0);
+    $answer = read_answer($handle, 10, $skip);
+
+    if ($answer === null) {
+        exit(1);
+    }
+
+    // La reponse est le code d etat U2F puis la chaine "U2F_V2". La balise est CTAPHID_MSG, mais
+    // une cle peut repondre sur la balise d erreur : la chaine est ce qui prouve CTAP1.
+    $text = printable($answer['payload']);
+
+    echo '  reponse CTAPHID_MSG : balise ', byte($answer['cmd']),
+        ' code d etat ', byte(ord($answer['payload'][0])), ' ', hex($answer['payload']),
+        $text !== '' ? ' (' . $text . ')' : '', PHP_EOL;
+
+    $is_u2f = str_contains($answer['payload'], 'U2F_V2');
+
+    check('cle qui parle CTAP1 (U2F)', $is_u2f, $is_u2f ? $text : 'pas de reponse U2F_V2');
+    check(
+        'la cle peut servir sur Qlip',
+        false,
+        'CTAP1 ne fait pas la verification utilisateur, et l app attend un objet d attestation CBOR '
+            . '(fmt, attStmt, authData) que la ceremonie U2F ne produit pas. La cle marche sur les sites '
+            . 'qui font U2F, ou WebAuthn avec userVerification preferred, pas avec required'
+    );
+
+    echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
+    exit($failures === 0 ? 0 : 1);
+}
 
 send($handle, $cid, CMD_CBOR, chr(CTAP_GET_INFO), $report ?? 0);
 $answer = read_answer($handle, 15, $skip);

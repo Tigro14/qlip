@@ -144,7 +144,14 @@ L'identifiant de rapport vient du descripteur (item Report ID, balise 8 en type 
 convention `0x20`/`0x21` ne s'applique pas a un device sans reports numerotes, et hidraw ne met
 rien au debut des octets lus dans ce cas. La trame recue est imprimee en octets bruts, parce
 qu'une reponse sans echo du nonce ne permet pas de distinguer une cle CTAP1 d'une erreur de
-tramage.
+tramage. La taille d'une trame d'initialisation est annoncee sur 2 octets (`BCNTH` + `BCNTL`),
+payload a l'offset 7, pour CTAPHID comme pour U2FHID : une implementation qui ecrit 3 octets fait
+lire une taille de 0 par la cle, qui repond une erreur de longueur. Cette erreur dit ce que le
+script a ecrit, pas ce que la cle sait faire, donc la sonde lit la reponse dans les deux formes et
+ne retient que celle dont la taille annoncee tient dans la trame. Ce qui distingue CTAP2 de CTAP1
+est le drapeau CBOR de la reponse INIT (`0x04`), pas le handshake : les codes d'erreur du transport
+sont les memes pour les deux versions, et la balise recue garde le drapeau d'initialisation
+(`0xBF` pour une erreur, `0x3F` sans le drapeau).
 
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web
