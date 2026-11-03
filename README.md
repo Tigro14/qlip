@@ -197,6 +197,26 @@ Les maillages sont verifies : chaque arete doit apparaitre dans les deux sens. L
 utilisees deux fois dans le meme sens sont des contacts (faces confondues des volumes
 bicolores), signalees mais pas considerees comme des erreurs.
 
+## Suppressions
+
+Le tableau de bord permet de supprimer une page (et les badges qui la portent), un badge,
+ou le compte. Suppression definitive : ce qui est detruit ne revient pas.
+
+- POST seulement : un GET ne doit pas detruire, un lien ne suffit pas ;
+- jeton CSRF obligatoire, et une confirmation explicite (case a cocher) ;
+- le mot de passe est demande pour le compte, parce qu une session laissee ouverte sur un
+  poste partage ne doit pas permettre de detruire un compte ;
+- le proprietaire supprime ce qui est a lui, l administrateur peut supprimer ce qu il peut
+  lire ;
+- une ligne est ecrite dans `audit_log` (`page_supprimee`, `badge_supprime`,
+  `compte_supprime`) avec qui et quoi. Pour un compte, la ligne est ecrite apres le DELETE
+  et garde l adresse dans le detail : `user_id` devient NULL (`ON DELETE SET NULL`), donc la
+  trace ne peut pas s appuyer sur le compte.
+
+Le quota de 10 creations par jour porte sur les evenements de creation (`action = 'badge'`
+dans `audit_log`), pas sur les lignes qui restent : supprimer un badge ne rembourse pas le
+quota. Sinon on pourrait creer, supprimer, creer sans limite.
+
 ## Tests
 
 ```bash
@@ -216,7 +236,8 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    pages, quotas par compte, exports etancheite, CSRF, ceremony WebAuthn par la route,
-   transports smtp et local : lien masque et echec d envoi signale) ;
+   transports smtp et local : lien masque et echec d envoi signale, suppressions avec
+   confirmation, cascade, quota non rembourse, trace d audit) ;
 7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
    serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
    `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
@@ -228,7 +249,10 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    quel, qu'une adresse avec un retour a la ligne est refusee avant de lancer le MTA, et
    qu'un code nonzero du MTA est signale comme un echec ;
 9. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
-   le PNG decode par zxing et la ceremony WebAuthn par HTTP.
+   le PNG decode par zxing, la ceremony WebAuthn par HTTP, et les suppressions (jeton,
+   confirmation, compte, GET refuse en 405) ;
+10. `tests/live_test.py` (lance par `tests/live.sh`) : protocole sur l instance deployee,
+   voir la section suivante.
 
 Les tests ecrivent dans `QLIP_OUT` (defaut `/tmp/opencode/badge`) et utilisent
 `QLIP_PHP` pour le binaire PHP, `QLIP_IMAGE` pour l'image podman.
@@ -237,6 +261,7 @@ Les tests ecrivent dans `QLIP_OUT` (defaut `/tmp/opencode/badge`) et utilisent
 
 ```bash
 ./tests/live.sh                                                     # lecture seule
+QLIP_LIVE_TRANSPORT=local ./tests/live.sh                           # idem, transport MTA local
 QLIP_LIVE_EMAIL=... QLIP_LIVE_PASSWORD=... QLIP_LIVE_WRITE=1 ./tests/live.sh
 ```
 
@@ -249,9 +274,15 @@ n'a pas de CSP. Chaque ligne indique laquelle des deux a repondu, et la sonde
 `/.htaccess` (fichier reel du depot, a la racine du document root) permet de savoir si
 le dossier servi est bien le depot : si l'app repond en 404, le fichier manque.
 
-La partie authentifiee est facultative et ecrite en base (l'app n'a pas de suppression,
-le slug cree est `livecheck`) : a lancer avec un compte de test, pas avec le compte
-administrateur.
+La partie authentifiee est facultative et ne se lance qu avec `QLIP_LIVE_WRITE=1`, avec un
+compte de test (jamais le compte administrateur) : les identifiants viennent seulement des
+variables d environnement, et le mot de passe n est jamais affiche. Le slug cree est
+`livecheck`, et ce qui est cree est supprime a la fin du test, donc la partie ecriture est
+repeitable. Elle verifie par HTTP, sur le vrai serveur : jeton CSRF refuse, confirmation
+obligatoire, POST seulement (un GET sur une route de suppression rend 405), suppression du
+badge puis de la page, lignes disparues, quota non rembourse, threpse de connexion. Le
+compte de test n est pas supprime : le test ne lit pas la poste, donc il ne peut pas se
+reinscrire.
 
 ## Organisation
 

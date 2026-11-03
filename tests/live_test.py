@@ -7,15 +7,16 @@ variables d'environnement qui arrivent a PHP, le cookie Secure, les assets servi
 serveur (et non par l'app), les dossiers hors document root, l'origine WebAuthn.
 
 Read-only par defaut : rien n'est ecrit en base. La partie authentifiee (compte de test,
-page, QR, STL, 3MF, threpse) ne se lance qu'avec QLIP_LIVE_WRITE=1, parce que l'app n'a
-pas de suppression : ce qui est cree pendant le test reste en base.
+page, QR, STL, 3MF, suppression, threpse) ne se lance qu'avec QLIP_LIVE_WRITE=1. Ce qui est
+cree est supprime a la fin du test, donc la partie ecriture est repeitable. Le compte de test
+n'est pas supprime : le test ne lit pas la poste, donc il ne peut pas se reinscrire.
 
 Un KO n'est pas toujours un bug de l'app : c'est souvent la conf du serveur qu'il faut
 corriger (document root, SetEnv, asset manquant, HSTS absent).
 
 Usage :
   QLIP_LIVE_URL=https://qlip.tigro.fr python3 tests/live_test.py
-  QLIP_LIVE_TRANSPORT=smtp python3 tests/live_test.py
+  QLIP_LIVE_TRANSPORT=local python3 tests/live_test.py
   QLIP_LIVE_EMAIL=... QLIP_LIVE_PASSWORD=... QLIP_LIVE_WRITE=1 python3 tests/live_test.py
 """
 
@@ -113,6 +114,32 @@ def csrf_of(body):
     match = re.search(rb'name="csrf" value="([^"]+)"', body) or re.search(rb'data-csrf="([^"]+)"', body)
 
     return match.group(1).decode() if match else ""
+
+
+def json_of(body):
+    try:
+        return json.loads(body.decode(errors="replace"))
+    except ValueError:
+        return {}
+
+
+def post_json(path, payload, opener=None):
+    status, _, body = raw(opener or session, "POST", path, payload)
+
+    return status, json_of(body)
+
+
+def get_json(path, opener=None):
+    status, _, body = raw(opener or session, "GET", path)
+
+    return status, json_of(body)
+
+
+def remaining_of(body):
+    """Le quota affiche sur le tableau de bord : il porte sur les creations du jour."""
+    match = re.search(rb"Aujourd'hui : (\d+)", body)
+
+    return int(match.group(1)) if match else -1
 
 
 def file_hash(path):
@@ -231,8 +258,9 @@ def run():
         check("compte de test", False, "QLIP_LIVE_EMAIL et QLIP_LIVE_PASSWORD sont requis")
         return
 
-    # 6. Parcours complet, avec un compte de test. Ce qui est cree n'est pas supprime
-    # (l'app n'a pas de suppression) : le slug est fixe pour qu'on le retrouve.
+    # 6. Parcours complet, avec un compte de test. Ce qui est cree est supprime a la fin,
+    # donc la partie ecriture est repeitable. Le slug est fixe pour qu'on le retrouve dans
+    # l'administration si une etape echoue avant la fin.
     status, headers, body = post("/login", {"email": EMAIL, "password": PASSWORD}, anonymous)
 
     if status != 302:
@@ -287,7 +315,37 @@ def run():
 
     check("3MF servi et valide", status == 200 and problems == [], problems[0] if problems else "%d triangles" % triangles)
 
-    # 7. Threpse, sur une session separee : le verou est par session, pas par compte.
+    remaining = remaining_of(get("/dashboard", anonymous)[2])
+
+    # 7. Suppression, par le serveur web : jeton CSRF, confirmation explicite, POST seulement.
+    status, data = post_json("/badges/%d/delete" % badge_id, {"csrf": "mauvais-jeton", "confirm": "1"}, anonymous)
+
+    check("suppression refusee sans jeton", status == 400, str(data)[:60])
+
+    status, data = post_json("/badges/%d/delete" % badge_id, {"csrf": csrf, "confirm": "0"}, anonymous)
+
+    check("suppression refusee sans confirmation", status == 400, str(data)[:60])
+
+    status, data = get_json("/badges/%d/delete" % badge_id, anonymous)
+
+    check("GET sur une route de suppression", status == 405, str(status))
+
+    status, data = post_json("/badges/%d/delete" % badge_id, {"csrf": csrf, "confirm": "1"}, anonymous)
+
+    check("badge supprime", status == 200 and data.get("deleted") is True, str(data)[:60])
+    check("badge disparu", get("/badges/%d/stl" % badge_id, anonymous)[0] == 404)
+
+    # Le quota porte sur les creations, pas sur les lignes qui restent : supprimer ne doit
+    # pas le rembourser.
+    check("quota non rembourse", remaining >= 0 and remaining_of(get("/dashboard", anonymous)[2]) == remaining, str(remaining))
+
+    status, data = post_json("/p/" + slug + "/delete", {"csrf": csrf, "confirm": "1"}, anonymous)
+
+    check("page supprimee", status == 200 and data.get("deleted") is True, str(data)[:60])
+    check("page disparue", get("/p/" + slug, anonymous)[0] == 404)
+    check("QR de la page disparu", get("/qr/" + slug + ".png", anonymous)[0] == 404)
+
+    # 8. Threpse, sur une session separee : le verou est par session, pas par compte.
     throttle = client(http.cookiejar.CookieJar())
     last = 0
 

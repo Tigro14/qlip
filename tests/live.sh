@@ -2,11 +2,12 @@
 # Protocol de tests en conditions reelles sur l'instance deployee.
 #
 #   QLIP_LIVE_URL=https://qlip.tigro.fr ./tests/live.sh
-#   QLIP_LIVE_TRANSPORT=smtp ./tests/live.sh
+#   QLIP_LIVE_TRANSPORT=local ./tests/live.sh
 #
 # Read-only par defaut. La partie authentifiee (compte de test, page, QR, STL, 3MF,
-# threpse) ne se lance qu'avec QLIP_LIVE_WRITE=1, et ce qui est cree n'est pas supprime
-# par l'app : a faire avec un compte de test, pas avec le compte administrateur.
+# suppression, threpse) ne se lance qu'avec QLIP_LIVE_WRITE=1, avec un compte de test et des
+# identifiants pris seulement dans l'environnement : le mot de passe n'est jamais affiche.
+# Ce qui est cree est supprime a la fin, donc la partie ecriture est repeitable.
 #
 # Ce script ne remplace pas ./tests/run.sh : la suite hors ligne verifie l'app, celui-ci
 # verifie le serveur (reecriture, variables d'environnement, assets, dossiers proteges).

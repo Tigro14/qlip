@@ -70,6 +70,7 @@ final class PageController
             'badges' => $this->app->badges->badgesOf((int) $user['id']),
             'remaining' => $this->app->badges->remaining((int) $user['id']),
             'csrf' => $this->app->session->token(),
+            'flash' => $this->app->takeFlash(),
         ]));
     }
 
@@ -135,5 +136,57 @@ final class PageController
         }
 
         return Response::redirect($this->app->url('p/' . $page['slug']));
+    }
+
+    /**
+     * Suppression d une page, et de ses badges. Suppression definitive : elle demande le
+     * jeton CSRF et une confirmation explicite, parce qu un simple lien ne doit pas detruire.
+     */
+    public function delete(Request $request): Response
+    {
+        $user = $this->app->currentUser();
+
+        if ($user === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Connexion requise.'], 401)
+                : Response::html('Connexion requise.', 401);
+        }
+
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Jeton CSRF invalide.'], 400)
+                : Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        if ($request->input('confirm') !== '1') {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Confirmation requise.'], 400)
+                : Response::html('Confirmation requise.', 400);
+        }
+
+        $page = $this->app->badges->pageBySlug($request->params['slug']);
+
+        if ($page === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Page introuvable.'], 404)
+                : Response::html('Page introuvable.', 404);
+        }
+
+        if ((int) $page['user_id'] !== (int) $user['id'] && (int) $user['is_admin'] !== 1) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Page d un autre compte.'], 403)
+                : Response::html('Page d un autre compte.', 403);
+        }
+
+        $slug = (string) $page['slug'];
+        $this->app->badges->deletePage((int) $user['id'], (int) $page['id']);
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'slug' => $slug]);
+        }
+
+        $this->app->flash('Page ' . $slug . ' supprimee.');
+
+        return Response::redirect($this->app->url('dashboard'));
     }
 }

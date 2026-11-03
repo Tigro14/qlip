@@ -6,7 +6,8 @@ Consignes pour travailler sur Qlip.
 
 Application PHP + SQLite locale : mini pages de contact, QR codes, badges porte-cles
 imprimables en STL/3MF, page d'administration protegee par YubiKey (WebAuthn), inscription
-avec email verifie, 10 creations de badge par jour et par compte.
+avec email verifie, 10 creations de badge par jour et par compte, suppression definitive
+(page, badge, compte) avec confirmation et trace dans `audit_log`.
 
 ## Contraintes qui ne changent pas
 
@@ -62,6 +63,9 @@ fichier, dans le namespace `Qlip\...`.
   d'identite ;
 - threpse de connexion : 8 tentatives par session, puis verrou de 300 s ;
 - email verifie obligatoire : tableau de bord et creation de badge renvoient 403 sinon ;
+- suppression definitive : POST seulement, jeton CSRF, confirmation explicite, mot de passe
+  pour le compte, et controle d appartenance (proprietaire ou administrateur). Une ligne
+  d audit est ecrite pour chaque suppression ;
 - `/admin` exige un compte marque administrateur et une session confirmee par une assertion
   (`webauthn_at` en session) ;
 - controles WebAuthn : challenge, origine, hash du RP ID, drapeaux UP/AT, compteur
@@ -133,7 +137,10 @@ verifie ce que la suite ne peut pas verifier parce que cela depend du serveur we
 `Secure`, origine WebAuthn). Une reponse de l'app se reconnait a la CSP : la sonde
 `/.htaccess` sert a distinguer un fichier absent du dossier servi d'un fichier refuse
 par le serveur. Il ne remplace pas la suite, et n'ecrit en base qu'avec
-`QLIP_LIVE_WRITE=1` (l'app n'a pas de suppression : a faire avec un compte de test).
+`QLIP_LIVE_WRITE=1` (avec un compte de test, jamais le compte administrateur) : ce qui est
+cree est supprime a la fin, donc la partie ecriture est repeitable. Le transport verifie
+est celui lu par PHP, donc lancer avec `QLIP_LIVE_TRANSPORT=local` sur l'instance qui
+utilise le MTA local.
 
 ## Points connus, ne pas "corriger"
 
@@ -150,6 +157,16 @@ par le serveur. Il ne remplace pas la suite, et n'ecrit en base qu'avec
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et
   `normal@qlip.test`.
+- Routes de suppression : POST seulement. `GET /badges/{id}/{format}` (telechargement)
+  aurait attrape `delete` comme un format, donc la liste des formats est fermee a `stl`
+  et `3mf` : un autre nom rend 404.
+- Quota : il porte sur les evenements de creation dans `audit_log` (`action = 'badge'`),
+  pas sur les lignes qui restent. Les actions de suppression ont des noms distincts
+  (`badge_supprime`, `page_supprimee`, `compte_supprime`) pour ne pas polluer le comptage.
+- Trace de suppression du compte : ecrite apres le DELETE, avec l'adresse dans le detail,
+  parce que `audit_log.user_id` devient NULL (`ON DELETE SET NULL`).
+- `proc_open` : les descripteurs sont lus du cote de l'enfant. Le stdin de l'enfant est
+  `0 => ['pipe', 'r']` ; avec `'w'`, le MTA lit un descripteur invalide (errno 9).
 - Conf serveur : `PutEnv` n'est pas une directive Apache avec PHP 8, `RewriteBase` n'est pas
   permise dans un `<VirtualHost>`, et la reecriture doit etre dans le meme contexte que le
   `DocumentRoot` : dans le contexte par serveur, `%{REQUEST_FILENAME}` peut n'etre que l'URI,

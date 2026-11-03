@@ -80,6 +80,55 @@ final class BadgeController
         return Response::redirect($this->app->url('dashboard'));
     }
 
+    /** Suppression d une creation, avec le meme garde que la creation : jeton + confirmation. */
+    public function delete(Request $request): Response
+    {
+        $user = $this->app->currentUser();
+
+        if ($user === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Connexion requise.'], 401)
+                : Response::html('Connexion requise.', 401);
+        }
+
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Jeton CSRF invalide.'], 400)
+                : Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        if ($request->input('confirm') !== '1') {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Confirmation requise.'], 400)
+                : Response::html('Confirmation requise.', 400);
+        }
+
+        $badge = $this->app->badges->badgeById((int) $request->params['id']);
+
+        if ($badge === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Badge introuvable.'], 404)
+                : Response::html('Badge introuvable.', 404);
+        }
+
+        if ((int) $badge['user_id'] !== (int) $user['id'] && (int) $user['is_admin'] !== 1) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Badge d un autre compte.'], 403)
+                : Response::html('Badge d un autre compte.', 403);
+        }
+
+        $id = (int) $badge['id'];
+        $this->app->badges->deleteBadge((int) $user['id'], $id);
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'id' => $id]);
+        }
+
+        $this->app->flash('Badge ' . $id . ' supprime.');
+
+        return Response::redirect($this->app->url('dashboard'));
+    }
+
     public function download(Request $request): Response
     {
         $user = $this->app->currentUser();
@@ -91,6 +140,11 @@ final class BadgeController
 
         if ((int) $badge['user_id'] !== (int) ($user['id'] ?? 0) && (int) ($user['is_admin'] ?? 0) !== 1) {
             return Response::json(['error' => 'Badge d un autre compte.'], 403);
+        }
+
+        // Le format est une liste fermee : sinon /badges/5/delete passe ici et rend un STL.
+        if (!in_array($request->params['format'], ['stl', '3mf'], true)) {
+            return Response::json(['error' => 'Format inconnu.'], 404);
         }
 
         $export = $this->app->badges->export($badge);

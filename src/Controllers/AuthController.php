@@ -138,6 +138,55 @@ final class AuthController
         return Response::redirect($this->app->url('login'));
     }
 
+    /**
+     * Suppression du compte. Comme la deconnexion, c est un POST avec le jeton CSRF, plus
+     * une confirmation explicite et le mot de passe : ce qui est detruit ne revient pas, et
+     * le mot de passe prouve que la session est bien celle du proprietaire (une session
+     * laissee ouverte sur un poste partage ne doit pas permettre de detruire un compte).
+     */
+    public function deleteAccount(Request $request): Response
+    {
+        $user = $this->app->currentUser();
+
+        if ($user === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Connexion requise.'], 401)
+                : Response::html('Connexion requise.', 401);
+        }
+
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Jeton CSRF invalide.'], 400)
+                : Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        if ($request->input('confirm') !== '1') {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Confirmation requise.'], 400)
+                : Response::html('Confirmation requise.', 400);
+        }
+
+        $password = (string) $request->input('password');
+
+        if ($password === '' || !password_verify($password, (string) $user['password_hash'])) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Mot de passe incorrect.'], 401)
+                : Response::html('Mot de passe incorrect.', 401);
+        }
+
+        $counts = $this->app->users->deleteAccount((int) $user['id']);
+
+        // Le compte n existe plus : la session ne peut plus y pointer.
+        $this->app->session->destroy();
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'pages' => $counts['pages'], 'badges' => $counts['badges']]);
+        }
+
+        $this->app->flash('Compte ' . $counts['email'] . ' supprime (' . $counts['pages'] . ' pages, ' . $counts['badges'] . ' badges).');
+
+        return Response::redirect($this->app->url('login'));
+    }
 
     private function lockedUntil(): int
     {

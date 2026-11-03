@@ -4,6 +4,7 @@
     <p class="note">
         Comptes : 10 creations de badge par jour.
         Aujourd'hui : <?= (int) $remaining ?> restante<?= $remaining === 1 ? '' : 's' ?>.
+        Supprimer ne rembourse pas le quota.
     </p>
 
     <h2>Creer une page de contact</h2>
@@ -40,6 +41,13 @@
                 <label>Email<input type="email" name="email_contact" value="<?= e($page['email_contact'] ?? '') ?>"></label>
                 <label>Note<textarea name="note"><?= e($page['note'] ?? '') ?></textarea></label>
                 <button type="submit">Enregistrer</button>
+            </form>
+
+            <form method="post" action="<?= attr(url('p/' . $page['slug'] . '/delete')) ?>">
+                <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                <label><input type="checkbox" name="confirm" value="1"> Confirmer la suppression</label>
+                <button type="submit">Supprimer la page</button>
             </form>
         </article>
     <?php endforeach; ?>
@@ -83,7 +91,7 @@
 
     <table>
         <thead>
-            <tr><th>#</th><th>Page</th><th>Style</th><th>Bicolore</th><th>Date</th><th>Fichiers</th></tr>
+            <tr><th>#</th><th>Page</th><th>Style</th><th>Bicolore</th><th>Date</th><th>Fichiers</th><th>Supprimer</th></tr>
         </thead>
         <tbody>
             <?php foreach ($badges as $badge): ?>
@@ -97,8 +105,32 @@
                         <a href="<?= attr(url('badges/' . $badge['id'] . '/stl')) ?>">STL</a>
                         <a href="<?= attr(url('badges/' . $badge['id'] . '/3mf')) ?>">3MF</a>
                     </td>
+                    <td>
+                        <form method="post" action="<?= attr(url('badges/' . $badge['id'] . '/delete')) ?>" class="inline">
+                            <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                            <label><input type="checkbox" name="confirm" value="1"> Confirmer</label>
+                            <button type="submit">Supprimer</button>
+                        </form>
+                    </td>
                 </tr>
             <?php endforeach; ?>
         </tbody>
     </table>
+
+    <h2>Supprimer le compte</h2>
+
+    <p class="note">
+        Suppression definitive : le compte, ses pages, ses badges, ses credentials et ses
+        jetons de verification partent. Rien ne revient, donc le mot de passe est demande.
+    </p>
+
+    <form method="post" action="<?= attr(url('account/delete')) ?>">
+        <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+        <label>Mot de passe<input type="password" name="password" required></label>
+        <label><input type="checkbox" name="confirm" value="1" required> Confirmer la suppression</label>
+
+        <button type="submit">Supprimer le compte</button>
+    </form>
 </section>

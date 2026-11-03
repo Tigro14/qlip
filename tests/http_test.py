@@ -4,8 +4,8 @@
 Un serveur PHP integre est demarre, puis des requetes HTTP reproduisent le
 parcours reel : inscription, lien de verification, connexion, pages, QR en PNG
 (contre-verify par decodage zxing), quota de 10 creations, telechargements STL
-et 3MF, CSRF, en-tetes de securite, ceremonies WebAuthn avec le faux
-authenticateur de tests/webauthn_fixture.py.
+et 3MF, suppressions (jeton, confirmation, compte), CSRF, en-tetes de securite,
+ceremonies WebAuthn avec le faux authenticateur de tests/webauthn_fixture.py.
 
 Le serveur PHP integre joue le role du serveur web de production (Apache ou nginx
 + PHP-FPM) : les fichiers reels sont servis directement, le reste va au front
@@ -443,6 +443,102 @@ def run():
     status, data = post_json("/webauthn/assert", dict(csrf=csrf, **normal.assert_(b64url_decode(ceremony["challenge"]), 2)))
 
     check("non admin refuse", status == 403, data.get("error", ""))
+
+
+    # 11. Suppression : elle est definitive, donc jeton CSRF + confirmation explicite, et le
+    # mot de passe pour le compte. Une autre session (un autre compte) ne peut rien detruire,
+    # et un GET ne detruit pas.
+    status, headers, _ = post("/pages", {"csrf": csrf, "title": "Page a detruire", "slug": "adetruire"})
+
+    doomed = headers.get("location", "").split("/p/")[-1].strip("/")
+
+    check("page a detruire creee", status == 302 and doomed == "adetruire", "%d %s" % (status, doomed))
+
+    status, data = post_json("/badges", {"csrf": csrf, "slug": doomed})
+
+    check("badge a detruire cree", status == 201, data.get("error", ""))
+    doomed_badge = data["badge"]["id"]
+
+    def remaining_of(body):
+        match = re.search(rb"Aujourd'hui : (\d+)", body)
+
+        return int(match.group(1)) if match else -1
+
+    remaining = remaining_of(get("/dashboard")[2])
+
+    status, data = post_json("/p/" + doomed + "/delete", {"csrf": "mauvais-jeton", "confirm": "1"})
+
+    check("suppression refusee sans jeton", status == 400, data.get("error", ""))
+
+    status, data = post_json("/p/" + doomed + "/delete", {"csrf": csrf, "confirm": "0"})
+
+    check("suppression refusee sans confirmation", status == 400, data.get("error", ""))
+
+    status, _, _ = raw(session, "GET", "/p/" + doomed + "/delete")
+
+    check("GET sur une route de suppression", status == 405, str(status))
+
+    other = client(http.cookiejar.CookieJar())
+
+    status, _, body = post("/register", {"csrf": csrf_of(get("/register", other)[2]), "email": "autre@qlip.test", "password": "un-mot-de-passe-long"}, other)
+
+    check("inscription autre compte", status == 200)
+    check("verification autre compte", get("/verify/" + link_of(body), other)[0] == 200)
+
+    status, _, _ = post("/login", {"csrf": csrf_of(get("/login", other)[2]), "email": "autre@qlip.test", "password": "un-mot-de-passe-long"}, other)
+
+    check("connexion autre compte", status == 302)
+    check("page d un autre compte visible", get("/p/" + doomed, other)[0] == 200)
+
+    other_csrf = csrf_of(get("/dashboard", other)[2])
+
+    status, data = post_json("/p/" + doomed + "/delete", {"csrf": other_csrf, "confirm": "1"}, other)
+
+    check("suppression d une page d un autre compte", status == 403, data.get("error", ""))
+
+    status, data = post_json("/badges/%d/delete" % doomed_badge, {"csrf": other_csrf, "confirm": "1"}, other)
+
+    check("suppression d un badge d un autre compte", status == 403, data.get("error", ""))
+
+    # Le proprietaire detruit ce qui est a lui.
+    status, data = post_json("/badges/%d/delete" % doomed_badge, {"csrf": csrf, "confirm": "1"})
+
+    check("badge supprime", status == 200 and data.get("deleted") is True, str(data))
+    check("badge disparu", get("/badges/%d/stl" % doomed_badge)[0] == 404)
+
+    # Supprimer ne rembourse pas le quota : il porte sur les creations, pas sur les lignes qui
+    # restent. Sinon on pourrait creer, supprimer, creer sans limite.
+    check("quota non rembourse", remaining > 0 and remaining_of(get("/dashboard")[2]) == remaining, str(remaining))
+
+    status, data = post_json("/p/" + doomed + "/delete", {"csrf": csrf, "confirm": "1"})
+
+    check("page supprimee", status == 200 and data.get("deleted") is True, str(data))
+    check("page disparue", get("/p/" + doomed)[0] == 404)
+    check("QR de la page disparu", get("/qr/" + doomed + ".png")[0] == 404)
+
+    # Le compte : le mot de passe est demande, parce que rien ne revient. Une page est
+    # gardee pour voir la cascade (le compte emporte ses pages et ses badges).
+    status, headers, _ = post("/pages", {"csrf": csrf, "title": "Cascade", "slug": "cascade"})
+
+    kept = headers.get("location", "").split("/p/")[-1].strip("/")
+
+    status, data = post_json("/account/delete", {"csrf": csrf, "confirm": "1"})
+
+    check("compte sans mot de passe refuse", status == 401, data.get("error", ""))
+
+    status, data = post_json("/account/delete", {"csrf": csrf, "confirm": "1", "password": "pas-le-bon-mot-de-passe"})
+
+    check("compte avec un mauvais mot de passe refuse", status == 401, data.get("error", ""))
+
+    status, data = post_json("/account/delete", {"csrf": csrf, "confirm": "1", "password": "un-mot-de-passe-long"})
+
+    check("compte supprime", status == 200 and data.get("deleted") is True and data.get("pages") == 1, str(data))
+    check("page du compte emportee par la cascade", get("/p/" + kept)[0] == 404)
+
+    status, headers, _ = get("/dashboard")
+
+    check("session videe apres la suppression du compte",
+          status == 302 and headers.get("location", "").endswith("/login"), headers.get("location", ""))
 
 
 def main():

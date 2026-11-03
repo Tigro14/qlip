@@ -69,6 +69,8 @@ final class Badges
             ]
         );
 
+        $this->audit($userId, 'page', 'page ' . $slug . ' creee');
+
         return $this->pageBySlug($slug);
     }
 
@@ -131,10 +133,15 @@ final class Badges
         return $this->baseUrl . '/p/' . $page['slug'];
     }
 
+    /**
+     * Creations du jour. On compte les evenements de creation (audit_log), pas les lignes
+     * qui restent : sinon supprimer un badge rembourserait le quota, et on pourrait creer,
+     * supprimer, creer sans limite.
+     */
     public function usedToday(int $userId): int
     {
         return $this->db->count(
-            'SELECT COUNT(*) FROM badges WHERE user_id = :user_id AND substr(created_at, 1, 10) = :day',
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'badge' AND user_id = :user_id AND substr(created_at, 1, 10) = :day",
             [':user_id' => $userId, ':day' => today()]
         );
     }
@@ -179,12 +186,42 @@ final class Badges
 
         $badge = $this->badgeById((int) $this->db->pdo()->lastInsertId());
 
-        $this->db->exec(
-            'INSERT INTO audit_log (user_id, action, detail, created_at) VALUES (:user_id, :action, :detail, :created_at)',
-            [':user_id' => $userId, ':action' => 'badge', ':detail' => 'badge ' . $badge['id'] . ' page ' . $page['slug'], ':created_at' => now()]
-        );
+        $this->audit($userId, 'badge', 'badge ' . $badge['id'] . ' page ' . $page['slug']);
 
         return $badge;
+    }
+
+    /**
+     * Suppressions definitives. Le controle d appartenance est fait par le controleur :
+     * ici on suppose qu il a ete fait. Le detail est pris avant le DELETE, parce qu apres
+     * la ligne n existe plus, et les badges d une page partent avec elle (ON DELETE CASCADE).
+     */
+    public function deletePage(int $userId, int $pageId): void
+    {
+        $page = $this->pageById($pageId);
+
+        if ($page === null) {
+            return;
+        }
+
+        $badges = $this->db->count('SELECT COUNT(*) FROM badges WHERE page_id = :page_id', [':page_id' => $pageId]);
+
+        $this->db->exec('DELETE FROM pages WHERE id = :id', [':id' => $pageId]);
+
+        $this->audit($userId, 'page_supprimee', 'page ' . $page['slug'] . ' supprimee (' . $badges . ' badges)');
+    }
+
+    public function deleteBadge(int $userId, int $badgeId): void
+    {
+        $badge = $this->badgeById($badgeId);
+
+        if ($badge === null) {
+            return;
+        }
+
+        $this->db->exec('DELETE FROM badges WHERE id = :id', [':id' => $badgeId]);
+
+        $this->audit($userId, 'badge_supprime', 'badge ' . $badge['id'] . ' supprime');
     }
 
     /** @return list<array{name: string, color: string, mesh: \Qlip\Stl\Mesh}> */
@@ -216,6 +253,14 @@ final class Badges
     public function png(array $page, int $modulePx = 4): string
     {
         return Renderer::png(QrCode::encode($this->qrText($page), 'M'), $modulePx);
+    }
+
+    private function audit(int $userId, string $action, string $detail): void
+    {
+        $this->db->exec(
+            'INSERT INTO audit_log (user_id, action, detail, created_at) VALUES (:user_id, :action, :detail, :created_at)',
+            [':user_id' => $userId, ':action' => $action, ':detail' => $detail, ':created_at' => now()]
+        );
     }
 
     /**

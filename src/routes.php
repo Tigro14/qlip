@@ -38,10 +38,14 @@ function qlip_routes(App $app): Router
     $router->post('/pages', fn (Request $request): Response => $pages->create($request));
     $router->get('/p/{slug}', fn (Request $request): Response => $pages->show($request));
     $router->post('/p/{slug}', fn (Request $request): Response => $pages->update($request));
+    $router->post('/p/{slug}/delete', fn (Request $request): Response => $pages->delete($request));
     $router->get('/qr/{slug}.png', fn (Request $request): Response => $pages->qr($request));
 
     $router->post('/badges', fn (Request $request): Response => $badges->create($request));
+    $router->post('/badges/{id}/delete', fn (Request $request): Response => $badges->delete($request));
     $router->get('/badges/{id}/{format}', fn (Request $request): Response => $badges->download($request));
+
+    $router->post('/account/delete', fn (Request $request): Response => $auth->deleteAccount($request));
 
     $router->get('/admin', fn (Request $request): Response => $admin->dashboard($request));
     $router->get('/admin/yubikey', fn (Request $request): Response => $admin->yubikey($request));

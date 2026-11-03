@@ -139,6 +139,41 @@ final class Users
         return $this->db->all('SELECT * FROM users ORDER BY id');
     }
 
+    /**
+     * Suppression du compte, et de tout ce qui est lie (ON DELETE CASCADE : pages, badges,
+     * credentials, jetons de verification). Rien ne revient, donc le mot de passe est
+     * verifie avant par le controleur.
+     *
+     * La ligne d audit est ecrite apres le DELETE, avec l adresse dans le detail : user_id
+     * devient NULL quand le compte part (ON DELETE SET NULL), et la trace doit survivre au
+     * compte.
+     *
+     * @return array{email: string, pages: int, badges: int}
+     */
+    public function deleteAccount(int $userId): array
+    {
+        $user = $this->find($userId);
+
+        if ($user === null) {
+            throw new \RuntimeException('Compte introuvable.');
+        }
+
+        $counts = [
+            'pages' => $this->db->count('SELECT COUNT(*) FROM pages WHERE user_id = :user_id', [':user_id' => $userId]),
+            'badges' => $this->db->count('SELECT COUNT(*) FROM badges WHERE user_id = :user_id', [':user_id' => $userId]),
+        ];
+
+        $this->db->exec('DELETE FROM users WHERE id = :id', [':id' => $userId]);
+
+        $this->audit(
+            null,
+            'compte_supprime',
+            'compte ' . $user['email'] . ' supprime (' . $counts['pages'] . ' pages, ' . $counts['badges'] . ' badges)'
+        );
+
+        return ['email' => (string) $user['email'], 'pages' => (int) $counts['pages'], 'badges' => (int) $counts['badges']];
+    }
+
     public function isAdminEmail(string $email): bool
     {
         $list = array_map('trim', explode(',', \env('QLIP_ADMIN_EMAILS')));

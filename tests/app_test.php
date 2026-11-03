@@ -558,5 +558,62 @@ $response = $send('POST', '/logout', ['csrf' => $app->session->token()]);
 check('deconnexion acceptee', $response->status() === 302, $response->body());
 check('session videes', $app->session->get('user_id') === null);
 
+// 17. Suppression : elle est definitive, donc jeton CSRF + confirmation explicite, et le
+// mot de passe pour le compte. Une session laissee ouverte sur un poste partage ne doit pas
+// permettre de detruire un compte.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+check('suppression refusee sans jeton', $send('POST', '/p/portefeuille/delete', ['csrf' => 'mauvais-jeton', 'confirm' => '1'])->status() === 400);
+check('suppression refusee sans confirmation', $send('POST', '/p/portefeuille/delete', ['confirm' => '0'])->status() === 400);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $otherUser['id']], true);
+
+check('suppression d une page d un autre compte', $send('POST', '/p/portefeuille/delete', ['confirm' => '1'])->status() === 403);
+check('suppression d un badge d un autre compte', $send('POST', '/badges/' . $badgeIds[0] . '/delete', ['confirm' => '1'])->status() === 403);
+check('page d un autre compte toujours la', $app->badges->pageBySlug('portefeuille') !== null);
+
+// L administrateur peut supprimer ce qu il peut lire : la page et le badge de l autre compte.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+$otherBadges = $app->db->count('SELECT COUNT(*) FROM badges WHERE user_id = :user_id', [':user_id' => (int) $otherUser['id']]);
+
+check('admin supprime la page d un autre compte', $send('POST', '/p/autre/delete', ['confirm' => '1'])->status() === 200);
+check('page disparue', $app->badges->pageBySlug('autre') === null);
+check('les badges partent avec la page', $otherBadges > 0 && $app->db->count('SELECT COUNT(*) FROM badges WHERE user_id = :user_id', [':user_id' => (int) $otherUser['id']]) === 0, (string) $otherBadges);
+
+$usedBefore = $app->badges->usedToday((int) $admin['id']);
+
+check('suppression d un badge', $send('POST', '/badges/' . $badgeIds[0] . '/delete', ['confirm' => '1'])->status() === 200);
+check('badge disparu', $app->badges->badgeById((int) $badgeIds[0]) === null);
+
+// Le quota porte sur les creations, pas sur les lignes qui restent : sinon supprimer
+// rembourserait le quota et on pourrait creer, supprimer, creer sans limite.
+check('suppression ne rembourse pas le quota', $app->badges->usedToday((int) $admin['id']) === $usedBefore, (string) $usedBefore);
+
+// Le compte : le mot de passe doit etre donne et correct.
+$gone = $app->users->register('compte-a-detruire@qlip.test', 'un-mot-de-passe-long');
+$goneUser = $gone['user'];
+$app->badges->createPage((int) $goneUser['id'], ['title' => 'Page du compte a detruire', 'slug' => 'adetruire']);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $goneUser['id']], true);
+
+check('compte sans mot de passe refuse', $send('POST', '/account/delete', ['confirm' => '1'])->status() === 401);
+check('compte avec un mauvais mot de passe refuse', $send('POST', '/account/delete', ['confirm' => '1', 'password' => 'pas-le-bon-mot-de-passe'])->status() === 401);
+check('compte encore la apres un refus', $app->users->findByEmail('compte-a-detruire@qlip.test') !== null);
+
+$response = $send('POST', '/account/delete', ['confirm' => '1', 'password' => 'un-mot-de-passe-long']);
+
+check('compte supprime', $response->status() === 200, $response->body());
+check('compte disparu', $app->users->findByEmail('compte-a-detruire@qlip.test') === null);
+check('page du compte disparue', $app->badges->pageBySlug('adetruire') === null);
+check('jeton de verification disparu avec le compte', $app->db->count("SELECT COUNT(*) FROM verify_tokens WHERE token = :token", [':token' => $gone['token']]) === 0);
+check('session videe apres la suppression du compte', $app->session->get('user_id') === null);
+
+// La trace survit au compte : la ligne est ecrite avec l adresse dans le detail, parce que
+// user_id devient NULL (ON DELETE SET NULL).
+$trace = $app->db->one("SELECT user_id, detail FROM audit_log WHERE action = 'compte_supprime' ORDER BY id DESC LIMIT 1");
+
+check('trace de suppression du compte', $trace !== null && $trace['user_id'] === null && str_contains((string) $trace['detail'], 'compte-a-detruire@qlip.test'), (string) ($trace['detail'] ?? ''));
+
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
 exit($failures === 0 ? 0 : 1);
