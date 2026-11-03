@@ -196,6 +196,15 @@ def run():
         cookie,
     )
 
+    # L autre cote du drapeau : un cookie Secure n est pas envoye sur http. Sur une instance
+    # servie en http, le drapeau pose par QLIP_SECURE_COOKIES est une erreur de conf, et le
+    # navigateur refuse le cookie : la session n est jamais reprise, donc tout POST est refuse.
+    # Le protocole ne peut pas le mesurer avec son propre bocal, parce que Python envoie un
+    # cookie Secure sur http contrairement a un navigateur : ce que le check voit est le
+    # drapeau sur la reponse.
+
+    check("cookie Secure sur une instance en http", not BASE.startswith("http://") or "secure" not in cookie.lower(), cookie)
+
     # 3. Assets : ils sont servis par le serveur web. Un 404 de l'app veut dire que le
     # fichier n'est pas trouve par le serveur : il manque dans le document root (ou le
     # document root n'est pas le depot).
@@ -252,6 +261,18 @@ def run():
     status, headers, _ = get("/dashboard", anonymous)
 
     check("anonime renvoie a la connexion", status == 302 and headers.get("location", "").endswith("/login"), headers.get("location", ""))
+
+    # Le jeton CSRF vient de la session, donc deux requetes avec le meme cookie doivent
+    # donner le meme jeton. Un jeton qui change veut dire que la session n est pas reprise :
+    # le cookie est refuse par le navigateur (Secure sur une instance servie en http, ou
+    # derriere un proxy qui termine TLS et que PHP voit en http), ou le chemin de sauvegarde
+    # n est pas accessible en ecriture au pool. Dans les deux cas tout POST est refuse avec le
+    # meme message. La suite ne peut pas le voir : en CLI la session est en memoire, et dans
+    # le conteneur le chemin de sauvegarde est accessible.
+    first = csrf_of(get("/login", anonymous)[2])
+    second = csrf_of(get("/login", anonymous)[2])
+
+    check("session reprise entre deux requetes", first != "" and first == second, "%s vs %s" % (first[:12], second[:12]))
 
     status, _, body = post("/pages", {"title": "Controle"}, anonymous)
 
