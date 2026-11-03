@@ -302,8 +302,13 @@ origine qui ne correspond pas au `rpId`. Les causes, dans l'ordre ou on les ecar
    Firefox, qui rejette la requete avant de parler a l'authenticateur.
 5. Forme de la signature : une cle U2F seule remet la signature d'assertion en DER, la forme de
    la couche de compatibilite CTAP1, pas en `r || s`. Les deux formes sont acceptees, une forme
-   malformee est refusee. Le harnais porte les deux formes et un cas malformé, donc la forme n'est
-   pas ce qui fait passer une signature.
+   malformee est refusee. Le harnais porte les deux formes et un cas de forme malformee, donc la
+   forme n'est pas ce qui fait passer une signature. La base est une autre mesure : la cle CTAP1 signe
+   `application parameter || presence || counter || challenge parameter`, soit AuthData sans hash
+   suivi du hash des donnees client, alors que le serveur controle
+   `hash(authData) + hash(clientDataJSON)`. La mesure se fait avec `tests/assert_base.py` sur les
+   octets d'une tentative ratee (corps du POST `/webauthn/assert` relu dans le navigateur), parce
+   que la suite ne peut pas savoir ce qu'une cle reelle signe.
 6. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
    `NotSupportedError`) : un echec immediat, avant tout prompt, vient des options ou de
    l'origine ; un echec apres le prompt vient d'une annulation ou du delai depasse. Une erreur
@@ -365,7 +370,7 @@ attente, et seule la ceremony `POST /login/2fa` l ouvre. Si la ceremony echoue, 
 peut etre ouverte, donc aucune route de suppression ne peut etre appelee : elle est POST seulement,
 exige le jeton CSRF de la session, la confirmation explicite et le mot de passe, et `/admin` exige
 une assertion, ce qui est justement ce qui echoue. Ce blocage n est pas une exception a ces regles :
-la regle « POST seulement, jeton, mot de passe, appartenance » est plus importante que la
+la regle "POST seulement, jeton, mot de passe, appartenance" est plus importante que la
 possibilite de detruire sans s etre authentifie.
 
 Deux cas, dans l ordre :

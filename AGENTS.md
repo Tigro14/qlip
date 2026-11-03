@@ -168,6 +168,13 @@ Le fixture `fido-u2f` de `tests/webauthn_fixture.py` remet un certificat auto-si
 Yubico, donc le certificat est accepte comme une declaration faute de racine. La base de
 signature est une mesure, pas une supposition : le cas `bad_base` montre que le verificateur
 ne se contente pas de verifier une signature faite sur n'importe quelle base.
+`tests/assert_base.py` n'est pas lancee par `run.sh` non plus : elle mesure la base d une
+assertion a partir des octets recus d une ceremonie reelle, ce que la suite ne peut pas savoir.
+Pour une cle U2F seule, la base de la reponse d authentification est application parameter + octet
+de presence utilisateur + counter + challenge parameter, soit AuthData sans hash suivi du hash des
+donnees client, et non la base WebAuthn hash(AuthData) + hash(clientDataJSON). La sonde est teste
+contre un cas connu : le harnais signe la base WebAuthn, donc la sonde doit nommer cette base et
+refuser l autre. Une sonde qui accepte toutes les bases ne mesure rien.
 L'identifiant de rapport vient du descripteur (item Report ID, balise 8 en type Global) : la
 convention `0x20`/`0x21` ne s'applique pas a un device sans reports numerotes, et hidraw ne met
 rien au debut des octets lus dans ce cas. La trame recue est imprimee en octets bruts, parce
