@@ -153,10 +153,11 @@ est le drapeau CBOR de la reponse INIT (`0x04`), pas le handshake : les codes d'
 sont les memes pour les deux versions, et la balise recue garde le drapeau d'initialisation
 (`0xBF` pour une erreur, `0x3F` sans le drapeau). Une requete U2F est une APDU (`CLA INS P1 P2 LC`
 puis les donnees), `CLA` etant pose a zero par le client et la longueur annoncee sur 1 octet (APDU
-courte) ou 3 (APDU etendue) : la YubiKey NEO a repondu `6E 00` (longueur de donnee incorrecte) a la
-forme `INS P1 P2 LC` sur 1 octet, donc elle attend une autre forme, et la sonde essaie les formes au
-lieu de deviner. La commande `U2F_VERSION` (0x03) repond la chaine `U2F_V2` suivie du mot d'etat, ce
-qui prouve CTAP1 sans rien ecrire sur la cle.
+courte) ou 3 (APDU etendue), alors que la description de `CTAPHID_MSG` fait commencer le payload par
+le byte de commande. Ce que l'applet attend n'est pas fixe par la spec : sur la YubiKey NEO la forme
+avec CLA (5 octets) repond `U2F_V2` puis `9000`, les formes sans CLA repondent `6E 00` (longueur de
+donnees incorrecte), donc la sonde essaie les formes au lieu de deviner. La commande `U2F_VERSION`
+(0x03) prouve CTAP1 sans rien ecrire sur la cle.
 
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web

@@ -468,10 +468,12 @@ if (($flags & CAP_CBOR) !== CAP_CBOR) {
     // par cette interface. La version U2F se lit par CTAPHID_MSG, qui est une lecture.
     //
     // Une requete U2F est une APDU : CLA pose a zero par le client, INS, P1, P2, puis la longueur
-    // des donnees. La longueur est annoncee sur 1 octet (APDU courte) ou 3 (APDU etendue), et CLA
-    // est soit dans le payload soit remplace par le transport : la cle repond 6E 00 quand ce n est
-    // pas la forme qu elle attend. Les formes sont donc essayees une par une, et c est la cle qui
-    // dit laquelle elle lit.
+    // des donnees. La longueur est annoncee sur 1 octet (APDU courte) ou 3 (APDU etendue), et la
+    // description de CTAPHID_MSG fait commencer le payload par le byte de commande, donc sans CLA.
+    // Ce que l applet attend n est pas impose par la spec : sur la YubiKey NEO les deux formes sans
+    // CLA repondent 6E 00 (longueur de donnee incorrecte), et la forme avec CLA (5 octets) repond
+    // U2F_V2 puis 9000. Les formes sont donc essayees une par une, et c est la cle qui dit laquelle
+    // elle lit.
     $forms = [
         'INS + P1 + P2 + LC sur 1 octet' => chr(U2F_VERSION) . "\x00\x00\x00",
         'INS + P1 + P2 + LC sur 3 octets' => chr(U2F_VERSION) . "\x00\x00\x00\x00\x00",
