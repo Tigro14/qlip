@@ -366,6 +366,7 @@ def run():
     called = set(re.findall(r"(?<![\w.$\])}])([A-Za-z0-9_$]+)\s*\(", source)) - keywords
 
     check("app.js : objet d attestation lu par getAttestation()", "getAttestation()" in script, "la methode de l API, pas un helper invente")
+    check("app.js : liste de credentials prise du challenge", "ceremony.allowCredentials" in script, "une cle non resident ne retrouve pas son identifiant seule")
     check(
         "app.js : aucune fonction appelee sans etre definie",
         called <= defined | known,

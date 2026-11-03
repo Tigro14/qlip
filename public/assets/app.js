@@ -116,18 +116,21 @@ async function registerCredential(element) {
     return data;
 }
 
-async function assertCredential(element, allowCredentials) {
+async function assertCredential(element) {
     const { csrf, base } = params(element);
     const ceremony = await getCeremony(element);
+
+    // La liste des credentials du compte vient du serveur : une cle qui ne stocke pas la
+    // credential en resident (non discoverable) ne peut pas retrouver son identifiant seule,
+    // et l assertion echoue si on lui passe une liste vide.
+    const allow = (ceremony.allowCredentials || []).map((entry) => ({ id: fromBase64Url(entry.id), type: 'public-key' }));
 
     const assertion = await navigator.credentials.get({
         rpId: ceremony.rpId,
         challenge: fromBase64Url(ceremony.challenge),
         timeout: 60000,
         userVerification: 'required',
-        allowCredentials: (allowCredentials && allowCredentials.length > 0)
-            ? allowCredentials.map((entry) => ({ id: fromBase64Url(entry.id), type: 'public-key' }))
-            : [],
+        allowCredentials: allow,
     });
 
     if (!assertion || !assertion.response) {
@@ -167,7 +170,7 @@ function bind(element) {
         loginButton.addEventListener('click', () => {
             loginButton.disabled = true;
 
-            assertCredential(element, [])
+            assertCredential(element)
                 .then((data) => { if (data.redirect) { window.location.href = data.redirect; } })
                 .catch((error) => report(element, describe(error), 'err'))
                 .finally(() => { loginButton.disabled = false; });
