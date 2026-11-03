@@ -58,6 +58,7 @@ final class AdminController
         // jamais proposee quand elle est pleine. Chaque liste a son propre numero, donc une
         // liste ne deplace pas les autres sur la meme page.
         $usersPager = new Pager('users_page', $this->app->db->count('SELECT COUNT(*) FROM users'), (int) $request->input('users_page'));
+        $credentialsPager = new Pager('credentials_page', $this->app->db->count('SELECT COUNT(*) FROM webauthn_credentials'), (int) $request->input('credentials_page'));
         $pagesPager = new Pager('pages_page', $this->app->db->count('SELECT COUNT(*) FROM pages'), (int) $request->input('pages_page'));
         $badgesPager = new Pager('badges_page', $this->app->db->count('SELECT COUNT(*) FROM badges'), (int) $request->input('badges_page'));
         $journalPager = new Pager('journal_page', $this->app->journal->count(), (int) $request->input('journal_page'));
@@ -71,11 +72,19 @@ final class AdminController
             'users' => $this->app->db->all(
                 'SELECT u.*,
                     (SELECT COUNT(*) FROM pages p WHERE p.user_id = u.id) AS pages,
-                    (SELECT COUNT(*) FROM badges b WHERE b.user_id = u.id) AS badges
+                    (SELECT COUNT(*) FROM badges b WHERE b.user_id = u.id) AS badges,
+                    (SELECT COUNT(*) FROM webauthn_credentials c WHERE c.user_id = u.id) AS credentials
                  FROM users u ORDER BY u.id LIMIT :limit OFFSET :offset',
                 [':limit' => Pager::PER_PAGE, ':offset' => $usersPager->offset()]
             ),
             'usersPager' => $usersPager,
+            'keys' => $this->app->db->all(
+                'SELECT c.*, u.email AS user_email
+                 FROM webauthn_credentials c JOIN users u ON u.id = c.user_id
+                 ORDER BY c.id LIMIT :limit OFFSET :offset',
+                [':limit' => Pager::PER_PAGE, ':offset' => $credentialsPager->offset()]
+            ),
+            'credentialsPager' => $credentialsPager,
             'pages' => $this->app->db->all(
                 'SELECT p.*, u.email AS user_email
                  FROM pages p JOIN users u ON u.id = p.user_id
@@ -112,13 +121,130 @@ final class AdminController
      * Effacement du journal plus vieux que la retention. Suppression definitive, dans le meme
      * style que les autres : POST seulement, jeton CSRF, confirmation explicite et mot de passe
      * du compte, parce que rien ne revient et qu une session laissee ouverte ne doit pas
-     * permettre de detruire la trace. Le controle d appartenance est le compte administrateur,
-     * et la session doit etre confirmee par une assertion comme le reste de la page.
+     * permettre de detruire la trace. La garde est la meme que pour les autres suppressions de
+     * l administration (voir guard()).
      *
      * La trace est ecrite par le service, apres le DELETE : la ligne qui consigne l effacement
      * ne peut pas etre effacee par l effacement.
      */
     public function purgeJournal(Request $request): Response
+    {
+        $guard = $this->guard($request);
+
+        if ($guard !== null) {
+            return $guard;
+        }
+
+        $user = $this->app->currentUser();
+        $before = $this->app->journal->cutoff();
+        $deleted = $this->app->journal->purge((int) $user['id'], $before);
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'rows' => $deleted, 'before' => $before]);
+        }
+
+        $this->app->flash($deleted . ' lignes du journal effacees (avant le ' . $before . ').');
+
+        return Response::redirect($this->app->url('admin'));
+    }
+
+    /**
+     * Suppression definitive d un compte. Le controle d appartenance est le proprietaire, ou
+     * l administrateur : il peut detruire ce qu il peut lire. Le mot de passe demande est celui
+     * du compte qui agit, pas celui du compte supprime : on ne peut pas le connaitre, et il prouve
+     * que la session n est pas une session laissee ouverte.
+     *
+     * Le compte emporte ses pages, ses badges, ses credentials et ses jetons. La trace est ecrite
+     * apres le DELETE, avec l adresse dans le detail, parce que audit_log.user_id devient NULL.
+     */
+    public function deleteUser(Request $request): Response
+    {
+        $guard = $this->guard($request);
+
+        if ($guard !== null) {
+            return $guard;
+        }
+
+        $user = $this->app->currentUser();
+        $id = (int) $request->params['id'];
+
+        try {
+            $counts = $this->app->users->deleteAccount($id);
+        } catch (\Throwable $error) {
+            return $request->wantsJson()
+                ? Response::json(['error' => $error->getMessage()], 404)
+                : Response::html($error->getMessage(), 404);
+        }
+
+        // Le compte n existe plus : la session ne peut plus y pointer, y compris quand
+        // l administrateur supprime son propre compte.
+        if ($id === (int) $user['id']) {
+            $this->app->session->destroy();
+        }
+
+        if ($request->wantsJson()) {
+            return Response::json([
+                'deleted' => true,
+                'id' => $id,
+                'pages' => $counts['pages'],
+                'badges' => $counts['badges'],
+            ]);
+        }
+
+        $this->app->flash('Compte ' . $counts['email'] . ' supprime (' . $counts['pages'] . ' pages, ' . $counts['badges'] . ' badges).');
+
+        return Response::redirect($this->app->url($id === (int) $user['id'] ? 'login' : 'admin'));
+    }
+
+    /**
+     * Cle 2FA supprimee par l administrateur, dans le meme style que la suppression du compte.
+     *
+     * Enlever la cle remet le compte au seul mot de passe. La session garde la credential qui l a
+     * confirmee : supprimer cette cle emporte la confirmation, donc la page d administration
+     * redemande une assertion ; supprimer une autre cle du meme compte ne la change pas.
+     */
+    public function deleteCredential(Request $request): Response
+    {
+        $guard = $this->guard($request);
+
+        if ($guard !== null) {
+            return $guard;
+        }
+
+        $user = $this->app->currentUser();
+        $credential = $this->app->credentials->find((int) $request->params['id']);
+
+        if ($credential === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Credential introuvable.'], 404)
+                : Response::html('Credential introuvable.', 404);
+        }
+
+        // La trace pointe sur le proprietaire de la cle, pas sur l administrateur qui agit.
+        $this->app->credentials->delete((int) $credential['user_id'], (int) $credential['id']);
+
+        if ((string) $this->app->session->get('webauthn_credential', '') === (string) $credential['credential_id']) {
+            $this->app->session->remove('webauthn_at');
+            $this->app->session->remove('webauthn_credential');
+        }
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'id' => (int) $credential['id']]);
+        }
+
+        $this->app->flash('Credential ' . $credential['credential_id'] . ' supprimee. Le compte se reconnecte avec le seul mot de passe.');
+
+        return Response::redirect($this->app->url('admin'));
+    }
+
+    /**
+     * Garde des suppressions definitives de l administration, la meme pour toutes : POST seulement
+     * (le routeur refuse un GET sur ces routes), jeton CSRF, confirmation explicite, mot de passe,
+     * et session confirmee par une assertion comme le reste de la page.
+     *
+     * @return Response|null La reponse quand la garde refuse, rien quand elle passe.
+     */
+    private function guard(Request $request): ?Response
     {
         $user = $this->app->currentUser();
 
@@ -158,16 +284,7 @@ final class AdminController
                 : Response::html('Mot de passe incorrect.', 401);
         }
 
-        $before = $this->app->journal->cutoff();
-        $deleted = $this->app->journal->purge((int) $user['id'], $before);
-
-        if ($request->wantsJson()) {
-            return Response::json(['deleted' => true, 'rows' => $deleted, 'before' => $before]);
-        }
-
-        $this->app->flash($deleted . ' lignes du journal effacees (avant le ' . $before . ').');
-
-        return Response::redirect($this->app->url('admin'));
+        return null;
     }
 
     public function yubikey(Request $request): Response

@@ -892,6 +892,130 @@ def run():
           status == 302 and "/login/2fa" not in headers.get("location", ""),
           headers.get("location", ""))
 
+    # 10e. Suppression definitive par l administration : compte et cle 2FA d un autre compte.
+    # La cle de l administrateur a ete supprimee en 10d, donc la session doit etre confirmee par
+    # une assertion nouvelle pour que les routes d administration s ouvrent.
+    status, _, body = get("/admin/yubikey", admin)
+    admin_csrf = csrf_of(body)
+    status, ceremony = get_json("/webauthn/challenge", admin)
+    status, data = post_json("/webauthn/register", dict(csrf=admin_csrf, **yubikey.register(b64url_decode(ceremony["challenge"]))), admin)
+
+    check("cle enregistree de nouveau pour l administrateur", status == 201, data.get("error", ""))
+
+    status, ceremony = get_json("/webauthn/challenge", admin)
+    status, data = post_json("/webauthn/assert", dict(csrf=admin_csrf, **yubikey.assert_(b64url_decode(ceremony["challenge"]), 5)), admin)
+
+    check("session de l administrateur confirmee par une assertion", status == 200 and data.get("ok") is True, data.get("error", ""))
+
+    status, _, body = get("/admin", admin)
+    admin_csrf = csrf_of(body)
+
+    # Le compte de test, avec une page et une cle : ce que l administrateur doit pouvoir effacer.
+    victim = client(http.cookiejar.CookieJar())
+    status, _, body = post("/register", {"csrf": csrf_of(get("/register", victim)[2]), "email": "efface@qlip.test", "password": "un-mot-de-passe-long"}, victim)
+
+    check("compte de test a effacer", get("/verify/" + link_of(body), victim)[0] == 200, str(status))
+
+    victim_csrf = csrf_of(get("/dashboard", victim)[2])
+    status, headers, _ = post("/pages", {"csrf": victim_csrf, "title": "Page a effacer", "slug": "aeffacer"}, victim)
+
+    status, ceremony = get_json("/webauthn/challenge", victim)
+    status, data = post_json("/webauthn/register", dict(csrf=victim_csrf, **normal.register(b64url_decode(ceremony["challenge"]))), victim)
+
+    check("cle 2FA enregistree pour le compte de test", status == 201, data.get("error", ""))
+
+    status, _, body = get("/admin", admin)
+    admin_csrf = csrf_of(body)
+
+    # Les formulaires sont sur la page d administration, pour chaque compte et chaque cle.
+    rows = re.findall(rb"<tr>.*?</tr>", body, re.S)
+    user_row = [line for line in rows if b"efface@qlip.test" in line and b"/admin/users/" in line]
+    key_row = [line for line in rows if b"efface@qlip.test" in line and b"/admin/credentials/" in line]
+    victim_id = int(re.search(rb"/admin/users/(\d+)/delete", user_row[0]).group(1)) if user_row else 0
+    victim_key = int(re.search(rb"/admin/credentials/(\d+)/delete", key_row[0]).group(1)) if key_row else 0
+
+    check("administration : formulaire pour effacer un compte", bool(user_row), str(status))
+    check("administration : formulaire pour effacer la cle 2FA d un compte", bool(key_row), str(status))
+
+    status, _, _ = raw(admin, "GET", "/admin/users/%s/delete" % victim_id)
+
+    check("GET sur la route effacer un compte", status == 405, str(status))
+
+    status, _, _ = raw(admin, "GET", "/admin/credentials/%s/delete" % victim_key)
+
+    check("GET sur la route effacer une cle d administration", status == 405, str(status))
+
+    status, data = post_json(
+        "/admin/users/%s/delete" % victim_id,
+        {"csrf": "mauvais-jeton", "confirm": "1", "password": "un-mot-de-passe-long"},
+        admin,
+    )
+
+    check("effacer un compte refuse sans jeton", status == 400, data.get("error", ""))
+
+    status, data = post_json(
+        "/admin/users/%s/delete" % victim_id,
+        {"csrf": admin_csrf, "confirm": "0", "password": "un-mot-de-passe-long"},
+        admin,
+    )
+
+    check("effacer un compte refuse sans confirmation", status == 400, data.get("error", ""))
+
+    status, data = post_json("/admin/users/%s/delete" % victim_id, {"csrf": admin_csrf, "confirm": "1"}, admin)
+
+    check("effacer un compte refuse sans mot de passe", status == 401, data.get("error", ""))
+
+    status, data = post_json(
+        "/admin/users/%s/delete" % victim_id,
+        {"csrf": admin_csrf, "confirm": "1", "password": "pas-le-bon-mot-de-passe"},
+        admin,
+    )
+
+    check("effacer un compte refuse avec un mauvais mot de passe", status == 401, data.get("error", ""))
+
+    # Le compte de test n est pas administrateur : la route d administration lui est fermee,
+    # meme pour ce qui lui appartient et avec son propre mot de passe.
+    status, data = post_json(
+        "/admin/users/%s/delete" % victim_id,
+        {"csrf": victim_csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+        victim,
+    )
+
+    check("effacer un compte reserve a l administration", status == 403, data.get("error", ""))
+
+    status, data = post_json(
+        "/admin/credentials/%s/delete" % victim_key,
+        {"csrf": victim_csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+        victim,
+    )
+
+    check("effacer une cle reserve a l administration", status == 403, data.get("error", ""))
+
+    # Le mot de passe demande est celui du compte qui agit : ici l administrateur. La cle effacee
+    # n est pas celle qui a confirme la session, donc la confirmation reste.
+    status, data = post_json(
+        "/admin/credentials/%s/delete" % victim_key,
+        {"csrf": admin_csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+        admin,
+    )
+
+    check("administration efface la cle 2FA d un compte", status == 200 and data.get("deleted") is True, json.dumps(data))
+    check("administration encore ouverte", get("/admin", admin)[0] == 200)
+
+    status, data = post_json(
+        "/admin/users/%s/delete" % victim_id,
+        {"csrf": admin_csrf, "confirm": "1", "password": "un-mot-de-passe-long"},
+        admin,
+    )
+
+    check("administration efface un compte", status == 200 and data.get("deleted") is True, json.dumps(data))
+
+    status, _, _ = get("/p/aeffacer", victim)
+
+    check("page du compte emportee par la cascade", status == 404, str(status))
+    check("trace de l effacement du compte sur le journal", b"compte efface@qlip.test supprime" in get("/admin", admin)[2])
+    check("formulaire disparu avec le compte", b"/admin/users/%d/delete" % victim_id not in get("/admin", admin)[2])
+
     # 11. Suppression : elle est definitive, donc jeton CSRF + confirmation explicite, et le
     # mot de passe pour le compte. Une autre session (un autre compte) ne peut rien detruire,
     # et un GET ne detruit pas.

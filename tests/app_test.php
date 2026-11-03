@@ -1177,5 +1177,153 @@ check(
 );
 check('la trace de l effacement n est pas effacee par l effacement', $trace !== null && strtotime((string) $trace['created_at']) > time() - 120, (string) ($trace['created_at'] ?? ''));
 
+// 20. Suppression definitive par l administration : compte et cle 2FA d un autre compte. La garde
+// est la meme que pour l effacement du journal : POST seulement, jeton CSRF, confirmation
+// explicite, mot de passe, session confirmee par une assertion. Le mot de passe est celui du
+// compte qui agit, pas celui du compte efface : on ne peut pas le connaitre, et il prouve que la
+// session n est pas laissee ouverte.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id'], 'webauthn_at' => now()], true);
+
+$victim = $app->users->register('victim@qlip.test', 'un-mot-de-passe-long')['user'];
+$victimPage = $app->badges->createPage((int) $victim['id'], ['title' => 'Page du compte efface', 'slug' => 'efface']);
+
+// La cle est une ligne en base : ce que le controle d administration mesure est l appartenance,
+// pas la ceremony, et la suite ne peut pas savoir si une cle a fait la verification utilisateur.
+$key = static function (int $userId, string $label) use ($app): int {
+    $app->db->exec(
+        'INSERT INTO webauthn_credentials (user_id, credential_id, cose, policy, uv_seen, created_at) VALUES (:user_id, :credential_id, :cose, :policy, 0, :created_at)',
+        [
+            ':user_id' => $userId,
+            ':credential_id' => $label,
+            ':cose' => '-',
+            ':policy' => Policy::DISCOURAGED,
+            ':created_at' => now(),
+        ]
+    );
+
+    return (int) $app->db->one('SELECT id FROM webauthn_credentials WHERE credential_id = :credential_id', [':credential_id' => $label])['id'];
+};
+
+$victimKey = $key((int) $victim['id'], 'cle du compte efface');
+
+$body = $send('GET', '/admin')->body();
+
+check('administration : formulaire pour effacer un compte', str_contains($body, 'admin/users/' . (int) $victim['id'] . '/delete'), '');
+check('administration : formulaire pour effacer la cle 2FA d un compte', str_contains($body, 'admin/credentials/' . $victimKey . '/delete'), '');
+
+// POST seulement : un GET ne detruit pas.
+check('GET sur la route effacer un compte', $router->dispatch(new Request('GET', '/admin/users/' . (int) $victim['id'] . '/delete'))->status() === 405);
+check('GET sur la route effacer une cle', $router->dispatch(new Request('GET', '/admin/credentials/' . $victimKey . '/delete'))->status() === 405);
+
+$deleteUser = static function (array $body) use ($send, $victim): Response {
+    return $send('POST', '/admin/users/' . (int) $victim['id'] . '/delete', $body);
+};
+
+check('effacer un compte refuse sans jeton', $deleteUser(['csrf' => 'mauvais-jeton', 'confirm' => '1', 'password' => 'mot-de-passe-long'])->status() === 400);
+check('effacer un compte refuse sans confirmation', $deleteUser(['confirm' => '0', 'password' => 'mot-de-passe-long'])->status() === 400);
+check('effacer un compte refuse sans mot de passe', $deleteUser(['confirm' => '1'])->status() === 401);
+check('effacer un compte refuse avec un mauvais mot de passe', $deleteUser(['confirm' => '1', 'password' => 'pas-le-bon-mot-de-passe'])->status() === 401);
+check('compte encore la apres un refus', $app->users->find((int) $victim['id']) !== null);
+
+// Un compte dont la session est confirmee par une assertion mais qui n est pas administrateur
+// ne peut rien effacer avec son propre mot de passe.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $otherUser['id'], 'webauthn_at' => now()], true);
+
+check('effacer un compte reserve a l administration', $deleteUser(['confirm' => '1', 'password' => 'un-mot-de-passe-long'])->status() === 403);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+$response = $deleteUser(['confirm' => '1', 'password' => 'mot-de-passe-long']);
+
+check('effacer un compte refuse quand la session n est pas confirmee par une assertion',
+    str_contains((string) $response->header('Location'), '/admin/yubikey'),
+    (string) $response->header('Location'));
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id'], 'webauthn_at' => now()], true);
+
+// La cle effacee n est pas celle qui a confirme la session : la confirmation reste.
+$response = $send('POST', '/admin/credentials/' . $victimKey . '/delete', ['confirm' => '1', 'password' => 'mot-de-passe-long']);
+
+check('administrateur efface la cle 2FA d un compte', $response->status() === 200, $response->body());
+check('cle 2FA disparue', $app->credentials->find($victimKey) === null);
+check('la cle effacee n emporte pas la confirmation de la session', $app->session->get('webauthn_at') !== null);
+
+$trace = $app->db->one("SELECT user_id, action, detail FROM audit_log WHERE action = 'credential_supprimee' ORDER BY id DESC LIMIT 1");
+
+check('trace de la cle 2FA : elle pointe sur le proprietaire, pas sur l administrateur',
+    $trace !== null && (int) $trace['user_id'] === (int) $victim['id'],
+    json_encode($trace));
+
+// Le compte emporte ses pages, ses badges, ses credentials et ses jetons. Une seconde cle est
+// enregistree pour mesurer la cascade.
+$victimKey2 = $key((int) $victim['id'], 'seconde cle du compte efface');
+
+$response = $deleteUser(['confirm' => '1', 'password' => 'mot-de-passe-long']);
+$data = json_decode($response->body(), true) ?: [];
+
+check('administrateur efface un compte', $response->status() === 200 && ($data['deleted'] ?? false) === true, $response->body());
+check('compte disparu', $app->users->find((int) $victim['id']) === null);
+check('page du compte emportee par la cascade', $app->db->count('SELECT COUNT(*) FROM pages WHERE id = :id', [':id' => (int) $victimPage['id']]) === 0);
+check('cle 2FA emportee par la cascade', $app->credentials->find($victimKey2) === null);
+
+$trace = $app->db->one("SELECT user_id, action, detail FROM audit_log WHERE action = 'compte_supprime' ORDER BY id DESC LIMIT 1");
+
+check('trace de l effacement du compte : l adresse dans le detail, user_id NULL',
+    $trace !== null && $trace['user_id'] === null && str_contains((string) $trace['detail'], 'victim@qlip.test'),
+    json_encode($trace));
+
+// Le formulaire d un compte efface ne peut plus apparaitre sur la page.
+check('formulaire disparu avec le compte', !str_contains($send('GET', '/admin')->body(), 'admin/users/' . (int) $victim['id'] . '/delete'));
+
+// La liste des cle 2FA est paginee comme les autres, par page de 50, avec son propre parametre.
+foreach (range(1, 60) as $index) {
+    $app->db->exec(
+        "INSERT INTO webauthn_credentials (user_id, credential_id, cose, policy, uv_seen, created_at) VALUES (:user_id, :credential_id, 'cle test', :policy, 0, :created_at)",
+        [
+            ':user_id' => (int) $admin['id'],
+            ':credential_id' => 'cle test ' . $index,
+            ':policy' => Policy::REQUIRED,
+            ':created_at' => now(),
+        ]
+    );
+}
+
+$keyPages = (int) ceil($app->db->count('SELECT COUNT(*) FROM webauthn_credentials') / Pager::PER_PAGE);
+$keyRequest = new Request('GET', '/admin', ['credentials_page' => $keyPages]);
+$keyRequest->headers['accept'] = 'application/json';
+$body = $router->dispatch($keyRequest)->body();
+
+check('liste des cle 2FA : plus d une page', $keyPages > 1, (string) $keyPages);
+check('liste des cle 2FA : le numero vient du COUNT, la derniere page est proposee',
+    str_contains($body, 'page ' . $keyPages . ' sur ' . $keyPages), (string) $keyPages);
+check('liste des cle 2FA : la page demande est la page rendue', str_contains($body, 'cle test 60'), '');
+check('liste des cle 2FA : son propre parametre dans l URL', str_contains($body, 'credentials_page='), '');
+
+// L administration efface son propre compte, et la session ne peut plus y pointer.
+$adminKey = $key((int) $admin['id'], 'cle de l admin');
+
+$app->session = new Session([
+    'token' => random_token(16),
+    'user_id' => (int) $admin['id'],
+    'webauthn_at' => now(),
+    'webauthn_credential' => 'cle de l admin',
+], true);
+
+$response = $send('POST', '/admin/credentials/' . $adminKey . '/delete', ['confirm' => '1', 'password' => 'mot-de-passe-long']);
+
+check('administration : la cle qui confirmait la session emporte la confirmation',
+    $response->status() === 200 && $app->session->get('webauthn_at') === null,
+    (string) $response->status());
+
+// La session doit etre de nouveau confirmee par une assertion pour effacer le compte.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id'], 'webauthn_at' => now()], true);
+
+$response = $send('POST', '/admin/users/' . (int) $admin['id'] . '/delete', ['confirm' => '1', 'password' => 'mot-de-passe-long']);
+
+check('administration efface son propre compte', $response->status() === 200, $response->body());
+check('la session est videe quand le compte qui l a ouverte est efface',
+    $app->session->get('user_id') === null && $app->session->get('webauthn_at') === null,
+    json_encode($app->session->data()));
+
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
 exit($failures === 0 ? 0 : 1);

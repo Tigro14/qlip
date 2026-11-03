@@ -71,6 +71,12 @@ fichier, dans le namespace `Qlip\...`.
 - suppression definitive : POST seulement, jeton CSRF, confirmation explicite, mot de passe
   pour le compte, et controle d appartenance (proprietaire ou administrateur). Une ligne
   d audit est ecrite pour chaque suppression ;
+- l administration efface un compte et la cle 2FA d un compte (`POST /admin/users/{id}/delete` et
+  `POST /admin/credentials/{id}/delete`) : la garde est la meme pour toutes ces suppressions,
+  ecrite une fois dans `AdminController::guard()`. Le mot de passe demande est celui du compte qui
+  agit, pas celui du compte efface : on ne peut pas le connaitre, et il prouve que la session n est
+  pas laissee ouverte. Un compte non administrateur est refuse sur ces routes, meme pour ce qui lui
+  appartient ; la trace de la cle effacee pointe sur le proprietaire, pas sur l administrateur ;
  - l effacement du journal (plus de 2 mois, `Journal::RETENTION_MONTHS`) est une suppression
    definitive dans le meme style : POST seulement, jeton CSRF, confirmation, mot de passe du
    compte, session confirmee par une assertion, et trace ecrite apres le DELETE parce que la ligne

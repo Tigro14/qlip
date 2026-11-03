@@ -375,6 +375,23 @@ session que cette cle avait apportee (`webauthn_at`) : la page d administration 
 assertion. Supprimer une autre cle du meme compte ne change pas la confirmation, la session
 garde la credential qui l a faite.
 
+### Compte et cle 2FA depuis l administration
+
+La page d administration affiche chaque compte avec le nombre de ses clees 2FA, et chaque cle avec
+le compte qui la porte. Les formulaires d effacement sont sur cette page : POST seulement, la meme
+garde que les autres suppressions definitives, et une session confirmee par une assertion comme le
+reste de la page.
+
+Le mot de passe demande est celui du compte qui agit, pas celui du compte efface : on ne peut pas le
+connaitre, et il prouve que la session n est pas laissee ouverte. Le controle d appartenance est le
+role : l administrateur peut detruire ce qu il peut lire, et un compte non administrateur est refuse
+sur ces routes, meme pour ce qui lui appartient.
+
+Effacer un compte emporte ses pages, ses badges, ses clees et ses jetons. Effacer une cle remet le
+compte au seul mot de passe, et si c est la cle qui avait confirme la session, la confirmation est
+retiree : la page d administration redemande une assertion. La liste des clees est paginee comme les
+autres, par page de 50.
+
 ### Journal : pagination et effacement de plus de 2 mois
 
 La page d administration lit ses listes par page de 50. Le nombre de pages vient d un COUNT,

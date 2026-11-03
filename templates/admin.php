@@ -55,7 +55,7 @@
 
     <table>
         <thead>
-            <tr><th>#</th><th>Email</th><th>Admin</th><th>Verifie</th><th>Pages</th><th>Badges</th><th>Creé</th></tr>
+            <tr><th>#</th><th>Email</th><th>Admin</th><th>Verifie</th><th>Pages</th><th>Badges</th><th>Cle 2FA</th><th>Creé</th><th>Effacer le compte</th></tr>
         </thead>
         <tbody>
             <?php foreach ($users as $account): ?>
@@ -66,11 +66,73 @@
                     <td><?= $account['verified_at'] === null ? 'non' : e($account['verified_at']) ?></td>
                     <td><?= (int) $account['pages'] ?></td>
                     <td><?= (int) $account['badges'] ?></td>
+                    <td><?= (int) $account['credentials'] ?></td>
                     <td><?= e($account['created_at']) ?></td>
+                    <td>
+                        <form method="post" action="<?= attr(url('admin/users/' . $account['id'] . '/delete')) ?>" class="inline">
+                            <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                            <label>Mot de passe<input type="password" name="password" required></label>
+                            <label><input type="checkbox" name="confirm" value="1" required> Confirmer</label>
+                            <button type="submit">Effacer</button>
+                        </form>
+                    </td>
                 </tr>
             <?php endforeach; ?>
         </tbody>
     </table>
+
+    <p class="note">
+        Effacer un compte est definitif : ses pages, ses badges, ses credentials et ses jetons
+        partent avec lui. Le mot de passe demande est celui du compte qui agit, pas celui du compte
+        efface : on ne peut pas le connaitre, et il prouve que la session n est pas laissee
+        ouverte. La trace est ecrite apres le DELETE, avec l adresse dans le detail, parce que
+        audit_log.user_id devient NULL.
+    </p>
+
+    <h2>Cle 2FA</h2>
+
+    <p class="note">
+        <?= (int) $credentialsPager->count() ?> lignes, page <?= (int) $credentialsPager->page() ?> sur <?= (int) $credentialsPager->pages() ?>.
+    </p>
+
+    <?php if ($credentialsPager->pages() > 1): ?>
+        <?= pager('admin', $credentialsPager) ?>
+    <?php endif; ?>
+
+    <table>
+        <thead>
+            <tr><th>#</th><th>Compte</th><th>ID de credential</th><th>Format</th><th>Politique</th><th>Compteur</th><th>Date</th><th>Effacer la cle</th></tr>
+        </thead>
+        <tbody>
+            <?php foreach ($keys as $key): ?>
+                <tr>
+                    <td><?= (int) $key['id'] ?></td>
+                    <td><?= e($key['user_email'] ?? '') ?></td>
+                    <td><code><?= e($key['credential_id']) ?></code></td>
+                    <td><code><?= e($key['fmt'] ?? '-') ?></code></td>
+                    <td><?= e($key['policy'] ?? '') ?></td>
+                    <td><?= (int) $key['sign_count'] ?></td>
+                    <td><?= e($key['created_at']) ?></td>
+                    <td>
+                        <form method="post" action="<?= attr(url('admin/credentials/' . $key['id'] . '/delete')) ?>" class="inline">
+                            <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                            <label>Mot de passe<input type="password" name="password" required></label>
+                            <label><input type="checkbox" name="confirm" value="1" required> Confirmer</label>
+                            <button type="submit">Effacer</button>
+                        </form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <p class="note">
+        Enlever la cle remet le compte au seul mot de passe. Si c est la cle qui a confirme la
+        session, la supprimer emporte cette confirmation : la page d administration redemande une
+        assertion. Supprimer une autre cle du meme compte ne la change pas.
+    </p>
 
     <h2>Pages de contact</h2>
 

@@ -60,6 +60,9 @@ function qlip_routes(App $app): Router
     $router->get('/admin/yubikey', fn (Request $request): Response => $admin->yubikey($request));
     // Effacement du journal : POST seulement, comme les autres suppressions definitives.
     $router->post('/admin/journal/purge', fn (Request $request): Response => $admin->purgeJournal($request));
+    // Compte et cle 2FA d un compte : POST seulement, meme garde que l effacement du journal.
+    $router->post('/admin/users/{id}/delete', fn (Request $request): Response => $admin->deleteUser($request));
+    $router->post('/admin/credentials/{id}/delete', fn (Request $request): Response => $admin->deleteCredential($request));
     $router->get('/webauthn/challenge', fn (Request $request): Response => $admin->challenge($request));
     $router->post('/webauthn/register', fn (Request $request): Response => $admin->register($request));
     $router->post('/webauthn/assert', fn (Request $request): Response => $admin->assert($request));
