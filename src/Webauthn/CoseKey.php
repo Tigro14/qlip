@@ -30,16 +30,33 @@ final class CoseKey
         throw new \InvalidArgumentException('Type de cle COSE non supporte.');
     }
 
-    /** @return array{key: string, alg: string, type: string} */
-    private static function ecPem(array $map): array
+    /**
+     * Point EC2 en forme non compressee : 0x04 || x || y.
+     *
+     * C'est la forme que l'attestation U2F signe, et la seule que le format
+     * fido-u2f connait : une cle U2F signe en EC2/P-256, il n'y a pas de cle RSA
+     * dans ce format.
+     */
+    public static function x962(array $map): string
     {
+        if (($map['-1'] ?? null) !== 2) {
+            throw new \InvalidArgumentException('Cle COSE non EC2 : le format fido-u2f exige une cle EC2.');
+        }
+
         $x = (string) ($map['-4'] ?? '');
         $y = (string) ($map['-5'] ?? '');
-        $curve = (string) ($map['-3'] ?? '');
 
         if ($x === '' || $y === '' || strlen($x) !== strlen($y)) {
             throw new \InvalidArgumentException('Cle COSE EC2 incomplete.');
         }
+
+        return "\x04" . $x . $y;
+    }
+
+    /** @return array{key: string, alg: string, type: string} */
+    private static function ecPem(array $map): array
+    {
+        $curve = (string) ($map['-3'] ?? '');
 
         $oid = match ($curve) {
             'P-256' => "\x2a\x86\x48\xce\x3d\x03\x01\x07",
@@ -56,8 +73,8 @@ final class CoseKey
         // OID ecPublicKey = 1.2.840.10045.2.1 (le curve OID est distinct).
         $algorithm = self::der(0x30, self::der(0x06, "\x2a\x86\x48\xce\x3d\x02\x01") . self::der(0x06, $oid));
         // Le premier octet du BIT STRING est le nombre de bits inutilises (0),
-        // ajoute par derBitString : le point commence par 0x04 (point non compressé).
-        $point = "\x04" . $x . $y;
+        // ajoute par derBitString : le point commence par 0x04 (point non compresse).
+        $point = self::x962($map);
 
         return ['key' => self::pem(0x30, $algorithm . self::derBitString($point)), 'alg' => self::algName($map), 'type' => 'EC2'];
     }

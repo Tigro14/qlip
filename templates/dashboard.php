@@ -118,6 +118,38 @@
         </tbody>
     </table>
 
+    <h2>Second facteur (YubiKey)</h2>
+
+    <p class="note">
+        Quand le compte a une credential, la cle est demandee a chaque connexion en plus du
+        mot de passe. L'enregistrement se fait sur une session deja confirmee par le mot de
+        passe, et la politique stockee par la credential est 'discouraged' : une cle U2F
+        (YubiKey NEO) ne sait pas faire la verification utilisateur, c'est le mot de passe
+        qui prouve l'utilisateur. Une cle capable de la faire (YubiKey 5, passkey) doit
+        etre enregistree depuis la page d'administration.
+    </p>
+
+    <div data-webauthn
+         data-csrf="<?= e($csrf ?? '') ?>"
+         data-rp="<?= e($rpId ?? '') ?>"
+         data-base="<?= attr(url('')) ?>">
+        <button type="button" data-action="register">Enregistrer la cle</button>
+
+        <?php if ($credentials !== []): ?>
+            <ul class="note">
+                <?php foreach ($credentials as $credential): ?>
+                    <li><code><?= e($credential['credential_id']) ?></code> &mdash;
+                        politique <?= e($credential['policy'] ?? '') ?> &mdash;
+                        compteur <?= (int) $credential['sign_count'] ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php else: ?>
+            <p class="note">Aucune credential : la connexion se fait avec le seul mot de passe.</p>
+        <?php endif; ?>
+
+        <p class="result"></p>
+    </div>
+
     <h2>Supprimer le compte</h2>
 
     <p class="note">

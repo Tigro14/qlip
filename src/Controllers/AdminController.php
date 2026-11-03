@@ -7,6 +7,7 @@ namespace Qlip\Controllers;
 use Qlip\App\App;
 use Qlip\App\Request;
 use Qlip\App\Response;
+use Qlip\Webauthn\Policy;
 
 /**
  * Page d'administration, protegee par YubiKey (WebAuthn/FIDO2).
@@ -86,6 +87,10 @@ final class AdminController
 
     public function yubikey(Request $request): Response
     {
+        // Ceremonie passkey : la cle est le seul moyen d'identifier l'utilisateur sur la
+        // page d'administration, donc la verification utilisateur reste exigee.
+        $this->app->ceremonyPolicy(Policy::PROFILE_PASSKEY);
+
         $user = $this->app->currentUser();
 
         return Response::html($this->app->view->render('yubikey.php', [
@@ -105,6 +110,8 @@ final class AdminController
         return Response::json([
             'challenge' => $this->app->challenge(),
             'rpId' => $this->app->config->rpId,
+            // La politique vient du serveur : le navigateur ne la choisit pas.
+            'policy' => $this->app->ceremonyPolicy(),
             'allowCredentials' => array_map(static fn (array $credential): array => [
                 'id' => $credential['credential_id'],
                 'type' => 'public-key',
@@ -130,7 +137,8 @@ final class AdminController
                 (int) $user['id'],
                 $request->input('attestation'),
                 $request->input('client_data'),
-                $this->app->challenge()
+                $this->app->challenge(),
+                $this->app->ceremonyPolicy()
             );
         } catch (\Throwable $error) {
             return Response::json(['error' => $error->getMessage()], 400);
@@ -190,7 +198,8 @@ final class AdminController
                 $request->input('auth_data'),
                 $request->input('client_data'),
                 $request->input('signature'),
-                $this->app->challenge()
+                $this->app->challenge(),
+                $this->app->ceremonyPolicy()
             );
         } catch (\Throwable $error) {
             $this->app->users->audit((int) $storedCredential['user_id'], 'webauthn_assert_failed', $error->getMessage());
@@ -210,6 +219,15 @@ final class AdminController
     /** @return list<array<string, mixed>> */
     private function credentialsFor(Request $request): array
     {
+        // Session en attente de second facteur : la liste vient du compte en attente, une
+        // cle U2F ne stocke pas la credential en resident et ne peut pas retrouver son
+        // identifiant seule.
+        $pending = $this->app->pendingUser();
+
+        if ($pending !== null) {
+            return $this->app->credentials->list((int) $pending['id']);
+        }
+
         $user = $this->app->currentUser();
 
         if ($user === null) {

@@ -6,6 +6,7 @@ use Qlip\App\App;
 use Qlip\App\Request;
 use Qlip\App\Response;
 use Qlip\App\Router;
+use Qlip\Webauthn\Policy;
 use Qlip\Controllers\AdminController;
 use Qlip\Controllers\AuthController;
 use Qlip\Controllers\BadgeController;
@@ -37,6 +38,8 @@ function qlip_routes(App $app): Router
 
     $router->get('/login', fn (Request $request): Response => $auth->showLogin($request));
     $router->post('/login', fn (Request $request): Response => $auth->login($request));
+    $router->get('/login/2fa', fn (Request $request): Response => $auth->showTwoFactor($request));
+    $router->post('/login/2fa', fn (Request $request): Response => $auth->twoFactor($request));
     $router->post('/logout', fn (Request $request): Response => $auth->logout($request));
 
     $router->get('/dashboard', fn (Request $request): Response => $pages->dashboard($request));

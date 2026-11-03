@@ -7,10 +7,11 @@ namespace Qlip\Controllers;
 use Qlip\App\App;
 use Qlip\App\Request;
 use Qlip\App\Response;
+use Qlip\Webauthn\Policy;
 
 /**
- * Inscription, verification d'email, connexion, reinitialisation de mot de passe,
- * deconnexion.
+ * Inscription, verification d'email, connexion, second facteur, reinitialisation de mot
+ * de passe, deconnexion.
  */
 final class AuthController
 {
@@ -200,6 +201,8 @@ final class AuthController
 
     public function showLogin(Request $request): Response
     {
+        $this->app->ceremonyPolicy(Policy::PROFILE_PRESENCE);
+
         return Response::html($this->app->view->render('login.php', [
             'title' => 'Connexion',
             'user' => $this->app->currentUser(),
@@ -224,22 +227,115 @@ final class AuthController
         $user = $this->app->users->attempt($request->input('email'), $request->input('password'));
 
         if ($user === null) {
-            $this->app->session->set('attempts', (int) $this->app->session->get('attempts', 0) + 1);
-
-            if ((int) $this->app->session->get('attempts', 0) >= self::MAX_ATTEMPTS) {
-                $this->app->session->set('locked_until', time() + self::LOCK_SECONDS);
-            }
+            $this->countAttempt();
 
             return Response::html('Identifiants incorrects, ou email non verifie.', 401);
         }
 
         $this->app->session->set('attempts', 0);
-        $this->app->session->regenerate();
-        $this->app->session->set('user_id', (int) $user['id']);
 
-        $this->app->users->audit((int) $user['id'], 'login', (string) $user['email']);
+        // Un compte qui a une credential est un compte a second facteur : le mot de passe
+        // ne suffit plus. La session est mise en attente, elle ne donne aucun acces ; la
+        // cle doit prouver sa possession. Le verrou est le meme que celui du mot de passe,
+        // sinon une ceremonie echouee servirait a tester les credentials sans limite.
+        if ($this->app->credentials->list((int) $user['id']) !== []) {
+            $this->app->session->regenerate();
+            $this->app->session->set('pending_user_id', (int) $user['id']);
+            $this->app->session->set('pending_email', (string) $user['email']);
+
+            $this->app->users->audit((int) $user['id'], 'login_pending', (string) $user['email']);
+
+            return Response::redirect($this->app->url('login/2fa'));
+        }
+
+        $this->acceptSession($user, 'login');
 
         return Response::redirect($this->app->url('dashboard'));
+    }
+
+    /** Page du second facteur : mot de passe accepte, possession de la cle a prouver. */
+    public function showTwoFactor(Request $request): Response
+    {
+        $pending = $this->app->pendingUser();
+
+        if ($pending === null) {
+            return Response::redirect($this->app->url('login'));
+        }
+
+        $this->app->ceremonyPolicy(Policy::PROFILE_PRESENCE);
+
+        return Response::html($this->app->view->render('two_factor.php', [
+            'title' => 'Second facteur',
+            'user' => $this->app->currentUser(),
+            'pending' => $pending,
+            'credentials' => $this->app->credentials->list((int) $pending['id']),
+            'csrf' => $this->app->session->token(),
+            'locked' => $this->lockedUntil(),
+            'rpId' => $this->app->config->rpId,
+            'flash' => $this->app->takeFlash(),
+        ]));
+    }
+
+    /**
+     * Assertion du second facteur. Le compte est celui de la session en attente : la
+     * credential doit lui appartenir, une credential d'un autre compte ne peut pas
+     * ouvrir cette session.
+     *
+     * L'assertion confirme la session (webauthn_at) : c'est ce que la page
+     * d'administration regarde. Une cle U2F ne peut pas satisfaire une ceremonie
+     * passkey, mais le mot de passe + la possession est le controle demande pour le
+     * profil presence, et il est plus fort qu'une possession seule.
+     */
+    public function twoFactor(Request $request): Response
+    {
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return Response::json(['error' => 'Jeton CSRF invalide.'], 400);
+        }
+
+        $pending = $this->app->pendingUser();
+
+        if ($pending === null) {
+            return Response::json(['error' => 'Connexion requise.'], 401);
+        }
+
+        $locked = $this->lockedUntil();
+
+        if ($locked > time()) {
+            return Response::json(['error' => 'Trop de tentatives. Recomence dans ' . ($locked - time()) . ' secondes.'], 429);
+        }
+
+        $credential = $this->app->credentials->findForUser((int) $pending['id'], (string) $request->input('credential_id'));
+
+        if ($credential === null) {
+            $this->countAttempt();
+            $this->app->users->audit((int) $pending['id'], 'webauthn_assert_failed', 'credential d un autre compte');
+
+            return Response::json(['error' => 'Credential inconnue pour ce compte.'], 403);
+        }
+
+        try {
+            $verified = $this->app->credentials->assert(
+                $credential,
+                (string) $request->input('auth_data'),
+                (string) $request->input('client_data'),
+                (string) $request->input('signature'),
+                $this->app->challenge(),
+                $this->app->ceremonyPolicy()
+            );
+        } catch (\Throwable $error) {
+            $this->countAttempt();
+            $this->app->users->audit((int) $pending['id'], 'webauthn_assert_failed', $error->getMessage());
+
+            return Response::json(['error' => $error->getMessage()], 400);
+        }
+
+        $this->app->session->set('webauthn_at', now());
+
+        $this->app->users->audit((int) $pending['id'], 'webauthn_assert', $verified['credential_id']);
+
+        $this->acceptSession($pending, 'login_2fa');
+
+        return Response::json(['ok' => true, 'redirect' => $this->app->url('dashboard')]);
     }
 
     public function logout(Request $request): Response
@@ -308,6 +404,37 @@ final class AuthController
     private function lockedUntil(): int
     {
         return (int) $this->app->session->get('locked_until', 0);
+    }
+
+    /**
+     * Tentative comptee sur la session : le verou est commun au mot de passe et au second
+     * facteur, une ceremonie echouee ne doit pas permettre de tester les credentials sans
+     * limite.
+     */
+    private function countAttempt(): void
+    {
+        $this->app->session->set('attempts', (int) $this->app->session->get('attempts', 0) + 1);
+
+        if ((int) $this->app->session->get('attempts', 0) >= self::MAX_ATTEMPTS) {
+            $this->app->session->set('locked_until', time() + self::LOCK_SECONDS);
+        }
+    }
+
+    /**
+     * Session acceptee : regeneree parce que l'identite change, et la mise en attente est
+     * fermee. L'action d'audit distingue le mot de passe seul du second facteur.
+     *
+     * @param array<string, mixed> $user
+     */
+    private function acceptSession(array $user, string $action): void
+    {
+        $this->app->session->set('attempts', 0);
+        $this->app->session->regenerate();
+        $this->app->session->set('user_id', (int) $user['id']);
+        $this->app->session->set('pending_user_id', null);
+        $this->app->session->set('pending_email', null);
+
+        $this->app->users->audit((int) $user['id'], $action, (string) $user['email']);
     }
 
     /**

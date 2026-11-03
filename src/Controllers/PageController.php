@@ -7,6 +7,7 @@ namespace Qlip\Controllers;
 use Qlip\App\App;
 use Qlip\App\Request;
 use Qlip\App\Response;
+use Qlip\Webauthn\Policy;
 
 /**
  * Pages publiques de contact, QR en PNG, edition par le proprietaire.
@@ -63,12 +64,18 @@ final class PageController
             return Response::redirect($this->app->url('login'));
         }
 
+        // L'enrolement depuis le tableau de bord se fait sur une session deja confirmee
+        // par le mot de passe : le profil est 'presence', la cle prouve la possession.
+        $this->app->ceremonyPolicy(Policy::PROFILE_PRESENCE);
+
         return Response::html($this->app->view->render('dashboard.php', [
             'title' => 'Mes pages',
             'user' => $user,
             'pages' => $this->app->badges->pagesOf((int) $user['id']),
             'badges' => $this->app->badges->badgesOf((int) $user['id']),
             'remaining' => $this->app->badges->remaining((int) $user['id']),
+            'credentials' => $this->app->credentials->list((int) $user['id']),
+            'rpId' => $this->app->config->rpId,
             'csrf' => $this->app->session->token(),
             'flash' => $this->app->takeFlash(),
         ]));

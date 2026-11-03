@@ -33,7 +33,7 @@ src/Controllers/ Auth, Pages, Badges, Admin
 src/Services/    Users, Badges, Credentials, Mailer
 src/Qr/          encodeur QR (Reed-Solomon, masks, penalites) + rendus SVG/PNG/ASCII
 src/Stl/         Mesh, Triangulator, Design, Badge, StlWriter, ThreeMfWriter
-src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Verifier
+src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Policy, Verifier
 src/Support/     helpers (base64url, echappement, jetons) + ZipWriter + client SMTP (TLS)
                  + remise au MTA local (arguments en liste, jamais une chaine de commande)
 templates/       vues HTML
@@ -76,6 +76,21 @@ fichier, dans le namespace `Qlip\...`.
 - controles WebAuthn : challenge, origine, hash du RP ID, drapeaux UP/AT, compteur
   strictement croissant, signature EC2/P-256 ou RSA. Un controle ne doit pas etre relache
   pour faire passer un test ;
+- la politique de verification utilisateur est choisie par le serveur, par profil de ceremonie
+  (`src/Webauthn/Policy.php`), et stockee par credential a l'enregistrement : le navigateur ne
+  la choisit pas. Le profil `presence` (second facteur, mot de passe deja accepte) est
+  `discouraged`, le profil `passkey` (`/admin`) reste `required` : une cle U2F seule ne peut pas
+  le satisfaire, donc elle ouvre la session par mot de passe + possession, pas l'administration
+  par une assertion seule. A l'assertion la politique effective est la plus forte des deux, et
+  `preferred` continue d'exiger la verification quand la cle l'a deja faite (`uv_seen`) ;
+- second facteur : mot de passe d'abord, ceremony ensuite (`POST /login/2fa`). La session en
+  attente ne donne aucun acces, la credential doit appartenir au compte en attente, le verrou est
+  commun au mot de passe (8 tentatives par session, puis 300 s), et les actions d'audit sont
+  distinctes (`login_pending`, `login_2fa`) ;
+- le format d'attestation `fido-u2f` (la seule cle U2F seule peut emettre) signe sur
+  `0x00 || rpIdHash || clientDataHash || credentialId || publicKeyU2F`, pas sur le message
+  WebAuthn : la base fait partie du controle. `x5c` y est obligatoire, la signature y est deja
+  en DER ;
 - en-tetes de securite poses dans `Response::send()`, sur toutes les reponses (CSP,
   `nosniff`, `frame-ancestors`) ;
 - SQL uniquement en prepare, avec params nommes, sans texte d'une requete dans la requete
@@ -140,6 +155,11 @@ l'API WebAuthn et les fonctions appelees sans etre definies. `tests/ctap_probe.p
 lancee par `run.sh` non plus : elle parle a une cle reelle (page d'usage F1D0, canal CTAPHID,
 `authenticatorGetInfo`) pour ce que la suite ne peut pas savoir, une cle n'ayant pas de
 verification utilisateur dans le faux authenticateur. Elle n'ecrit rien sur la cle.
+Le fixture `fido-u2f` de `tests/webauthn_fixture.py` remet un certificat auto-signé
+(`cryptography` est dans le conteneur) : la suite ne peut pas connaitre la chaine de la CA
+Yubico, donc le certificat est accepte comme une declaration faute de racine. La base de
+signature est une mesure, pas une supposition : le cas `bad_base` montre que le verificateur
+ne se contente pas de verifier une signature faite sur n'importe quelle base.
 L'identifiant de rapport vient du descripteur (item Report ID, balise 8 en type Global) : la
 convention `0x20`/`0x21` ne s'applique pas a un device sans reports numerotes, et hidraw ne met
 rien au debut des octets lus dans ce cas. La trame recue est imprimee en octets bruts, parce
@@ -178,12 +198,17 @@ utilise le MTA local.
   meme sens est un contact (faces confondues des volumes bicolores), signale mais pas
   considere comme une erreur.
 - WebAuthn : AuthData = 32 octets de hash du RP ID + drapeaux + compteur, bloc AT a
-  l'offset 37 ; labels COSE negatifs ; signature raw `r||s` convertie en DER a la main ;
-  tampons echanges en base64url. Formats d'attestation acceptes : `none` et `packed`
-  (auto-attestation), la racine est optionnelle. Cles du map CBOR d'attestation : `fmt`,
-  `attStmt`, `authData` ; `attAuthData` n'existe pas dans la spec, donc un harnais qui
-  l'ecrit ne peut pas voir l'erreur devant un vrai navigateur. Handle d'utilisateur : 16
-  octets minimum (la spec), donc l'id est ecrit en big-endian complete par des zeros.
+  l'offset 37 ; labels COSE negatifs ; signature raw `r||s` convertie en DER a la main
+  (`fido-u2f` remet deja une signature DER, donc `Signature::verify()` prend un drapeau
+  `$der`) ; tampons echanges en base64url. Formats d'attestation acceptes : `none`, `packed`
+  (auto-attestation) et `fido-u2f` (`x5c` obligatoire, pas d'auto-attestation, pas d'AAGUID :
+  l'identite de l'appareil vient du numero de serie du certificat), la racine est optionnelle.
+  Cles du map CBOR d'attestation : `fmt`, `attStmt`, `authData` ; `attAuthData` n'existe pas
+  dans la spec, donc un harnais qui l'ecrit ne peut pas voir l'erreur devant un vrai
+  navigateur. Handle d'utilisateur : 16 octets minimum (la spec), donc l'id est ecrit en
+  big-endian complete par des zeros.
+- Schema : `policy` et `uv_seen` sont ajoutees a `webauthn_credentials` par un ALTER garde par
+  `PRAGMA table_info`, la base de production n'est jamais reconstruite.
 - `session_status()` peut mentir avec un binaire PHP statique : la logique s'appuie sur
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et

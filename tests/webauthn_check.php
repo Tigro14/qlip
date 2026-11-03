@@ -6,6 +6,7 @@ require __DIR__ . '/../src/autoload.php';
 
 use Qlip\Webauthn\Cbor;
 use Qlip\Webauthn\CoseKey;
+use Qlip\Webauthn\Policy;
 use Qlip\Webauthn\Verifier;
 
 $json = json_decode(file_get_contents(getenv('QLIP_WEBAUTHN_JSON') ?: '/tmp/opencode/webauthn.json'), true);
@@ -32,6 +33,11 @@ function check(string $label, bool $ok, string $detail = ''): void
 foreach ($json['fixtures'] as $fixture) {
     echo $fixture['name'], PHP_EOL;
 
+    // La politique vient du profil de ceremonie, donc elle est donnee a chaque fixture :
+    // une fixture reglee en 'required' ne peut pas etre acceptee sans verification
+    // utilisateur, et une cle U2F (politique 'discouraged') ne peut pas la faire.
+    $policy = (string) $fixture['policy'];
+
     // Le nom des cles du map CBOR vient de la spec : fmt, attStmt, authData. Un navigateur
     // reel n emet pas attAuthData. Le harnais doit ecrire la cle de la spec, pas celle de
     // l implementation, sinon l erreur ne se voit que sur l instance deployee.
@@ -44,19 +50,53 @@ foreach ($json['fixtures'] as $fixture) {
 
     // Enregistrement
     try {
-        $registered = $verifier->verifyRegistration($fixture['register']['attestation'], $fixture['register']['client_data'], $json['challenge']);
+        $registered = $verifier->verifyRegistration(
+            $fixture['register']['attestation'],
+            $fixture['register']['client_data'],
+            $json['challenge'],
+            $policy
+        );
     } catch (Throwable $error) {
         check('enregistrement', false, $error->getMessage());
         continue;
     }
 
     check('enregistrement', true, 'fmt=' . $registered['fmt']);
+    check('politique de la ceremonie', $registered['policy'] === $policy, $policy);
+    check('drapeau UV', $registered['user_verified'] === $fixture['user_verified'], $policy);
     check('credential id', base64url_encode($registered['credential_id']) === $fixture['register']['credential_id']);
-    check('cle COSE conservée', $registered['cose'] === $fixture['register']['cose']);
+    check('cle COSE conservee', $registered['cose'] === $fixture['register']['cose']);
     check('compteur', $registered['sign_count'] === $fixture['register']['sign_count']);
 
     $key = CoseKey::toPem(Cbor::decode(base64url_decode($registered['cose'])));
     check('PEM', str_contains($key['key'], '-----BEGIN PUBLIC KEY-----'), $key['type'] . '/' . $key['alg']);
+
+    // Format fido-u2f : la signature porte sur 0x00 || rpIdHash || clientDataHash ||
+    // credentialId || publicKeyU2F, pas sur hash(authData) + hash(clientData). Une signature
+    // calculee sur l'autre base doit etre refusee : le controle porte sur ce sur quoi la
+    // signature est faite, pas seulement sur sa forme.
+    if (isset($fixture['bad_base'])) {
+        try {
+            $verifier->verifyRegistration(
+                $fixture['bad_base']['attestation'],
+                $fixture['bad_base']['client_data'],
+                $json['challenge'],
+                $policy
+            );
+
+            check('base de signature U2F refusee', false);
+        } catch (Throwable $error) {
+            check('base de signature U2F refusee', true, $error->getMessage());
+        }
+    }
+
+    $stored = [
+        'credential_id' => base64url_decode($fixture['register']['credential_id']),
+        'cose' => $fixture['register']['cose'],
+        'sign_count' => 0,
+        'policy' => $policy,
+        'uv_seen' => $fixture['user_verified'],
+    ];
 
     // Assertion
     try {
@@ -64,8 +104,9 @@ foreach ($json['fixtures'] as $fixture) {
             $fixture['assert']['auth_data'],
             $fixture['assert']['client_data'],
             $fixture['assert']['signature'],
-            ['credential_id' => base64url_decode($fixture['register']['credential_id']), 'cose' => $fixture['register']['cose'], 'sign_count' => 0],
-            $json['challenge']
+            $stored,
+            $json['challenge'],
+            $policy
         );
 
         check('assertion', true, 'compteur ' . $asserted['sign_count']);
@@ -74,13 +115,16 @@ foreach ($json['fixtures'] as $fixture) {
     }
 
     // Rejoue : le meme compteur ne doit pas etre accepte deux fois.
+    $replay = array_merge($stored, ['sign_count' => 2]);
+
     try {
         $verifier->verifyAssertion(
             $fixture['replay']['auth_data'],
             $fixture['replay']['client_data'],
             $fixture['replay']['signature'],
-            ['credential_id' => base64url_decode($fixture['register']['credential_id']), 'cose' => $fixture['register']['cose'], 'sign_count' => 2],
-            $json['challenge']
+            $replay,
+            $json['challenge'],
+            $policy
         );
 
         check('rejoue refuse', false);
@@ -94,8 +138,9 @@ foreach ($json['fixtures'] as $fixture) {
             $fixture['bad_origin']['auth_data'],
             $fixture['bad_origin']['client_data'],
             $fixture['bad_origin']['signature'],
-            ['credential_id' => base64url_decode($fixture['register']['credential_id']), 'cose' => $fixture['register']['cose'], 'sign_count' => 1],
-            $json['challenge']
+            array_merge($stored, ['sign_count' => 1]),
+            $json['challenge'],
+            $policy
         );
 
         check('origine refusee', false);
@@ -109,8 +154,9 @@ foreach ($json['fixtures'] as $fixture) {
             $fixture['bad_signature']['auth_data'],
             $fixture['bad_signature']['client_data'],
             $fixture['bad_signature']['signature'],
-            ['credential_id' => base64url_decode($fixture['register']['credential_id']), 'cose' => $fixture['register']['cose'], 'sign_count' => 1],
-            $json['challenge']
+            array_merge($stored, ['sign_count' => 1]),
+            $json['challenge'],
+            $policy
         );
 
         check('signature refusee', false);
@@ -124,14 +170,76 @@ foreach ($json['fixtures'] as $fixture) {
             $fixture['assert']['auth_data'],
             $fixture['assert']['client_data'],
             $fixture['assert']['signature'],
-            ['credential_id' => base64url_decode($fixture['register']['credential_id']), 'cose' => $fixture['register']['cose'], 'sign_count' => 0],
-            base64url_encode(random_bytes(32))
+            $stored,
+            base64url_encode(random_bytes(32)),
+            $policy
         );
 
         check('challenge refuse', false);
     } catch (Throwable $error) {
         check('challenge refuse', true, $error->getMessage());
     }
+
+    // Une ceremonie reglee en 'required' ne peut pas etre abaissee par la politique stockee
+    // de la credential : une cle U2F ne peut pas satisfaire une ceremonie passkey, et une
+    // cle qui a deja fait la verification utilisateur continue de la demander.
+    try {
+        $verifier->verifyAssertion(
+            $fixture['assert']['auth_data'],
+            $fixture['assert']['client_data'],
+            $fixture['assert']['signature'],
+            $stored,
+            $json['challenge'],
+            Policy::REQUIRED
+        );
+
+        check('required ne se relache pas pour la politique de la credential', $fixture['user_verified'], 'acceptee sans UV');
+    } catch (Throwable $error) {
+        check('required ne se relache pas pour la politique de la credential', !$fixture['user_verified'], $error->getMessage());
+    }
+
+    // 'preferred' autorise de passer la verification une fois, mais pas de la passer a
+    // chaque fois quand la cle est capable de la faire : une credential qui l a deja faite
+    // continue de la demander.
+    $preferred = array_merge($stored, ['policy' => Policy::PREFERRED, 'uv_seen' => true]);
+
+    try {
+        $verifier->verifyAssertion(
+            $fixture['assert']['auth_data'],
+            $fixture['assert']['client_data'],
+            $fixture['assert']['signature'],
+            $preferred,
+            $json['challenge'],
+            Policy::PREFERRED
+        );
+
+        check('preferred garde la verification quand la cle l a deja faite', $fixture['user_verified'], 'acceptee sans UV');
+    } catch (Throwable $error) {
+        check('preferred garde la verification quand la cle l a deja faite', !$fixture['user_verified'], $error->getMessage());
+    }
+}
+
+echo PHP_EOL, 'politique de verification utilisateur', PHP_EOL;
+
+check('profil presence (second facteur avec mot de passe)', Policy::forProfile(Policy::PROFILE_PRESENCE) === Policy::DISCOURAGED);
+check('profil passkey (la cle identifie l utilisateur)', Policy::forProfile(Policy::PROFILE_PASSKEY) === Policy::REQUIRED);
+check('la ceremonie ne peut pas descendre en dessous de la credential', Policy::strongest(Policy::DISCOURAGED, Policy::REQUIRED) === Policy::REQUIRED);
+check('required exige la verification utilisateur', Policy::enforces(Policy::REQUIRED, false));
+check('preferred l exige quand la cle l a deja faite', Policy::enforces(Policy::PREFERRED, true) && !Policy::enforces(Policy::PREFERRED, false));
+check('discouraged ne l exige jamais', !Policy::enforces(Policy::DISCOURAGED, true));
+
+try {
+    Policy::normalize('jamais demandee par la spec');
+    check('politique inconnue refusee', false);
+} catch (Throwable $error) {
+    check('politique inconnue refusee', true, $error->getMessage());
+}
+
+try {
+    Policy::forProfile('profil invente');
+    check('profil inconnu refuse', false);
+} catch (Throwable $error) {
+    check('profil inconnu refuse', true, $error->getMessage());
 }
 
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;

@@ -11,9 +11,12 @@ Usage : python3 tests/webauthn_fixture.py > /tmp/opencode/webauthn.json
 import base64
 import hashlib
 import json
+from datetime import datetime, timezone
 
-from cryptography.hazmat.primitives import hashes
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.x509.oid import NameOID
 
 RP_ID = "qlip.test"
 ORIGIN = "https://qlip.test"
@@ -131,9 +134,22 @@ def sign(key, message, alg):
     return key.sign(message, padding.PKCS1v15(), hashes.SHA256())
 
 
-def fixture(name, key, cose, alg, credential_id):
-    # Enregistrement : AT + UP + UV.
-    data = auth_data(0x45, 1, credential_id, cose, True)
+def fixture(
+    name,
+    key,
+    cose,
+    alg,
+    credential_id,
+    policy="required",
+    can_verify=True,
+    fmt="none",
+    att_stmt=None,
+    bad_base=None,
+):
+    # Enregistrement : AT + UP + UV. Une cle U2F seule ne sait pas faire la verification
+    # utilisateur : le drapeau UV est pose seulement quand l'authenticateur peut la faire.
+    flags = 0x45 if can_verify else 0x41
+    data = auth_data(flags, 1, credential_id, cose, True)
     create_client = client_data("webauthn.create", ORIGIN)
     message = hashlib.sha256(data).digest() + hashlib.sha256(create_client).digest()
 
@@ -141,9 +157,9 @@ def fixture(name, key, cose, alg, credential_id):
     # alignee sur l'implementation, sinon un nom de cle errone passe les tests et echoue
     # devant un vrai navigateur.
     attestation = cbor({
-        "fmt": "none",
+        "fmt": fmt,
         "authData": data,
-        "attStmt": {},
+        "attStmt": att_stmt or {},
     })
 
     register = {
@@ -155,7 +171,7 @@ def fixture(name, key, cose, alg, credential_id):
     }
 
     # Assertion : compteur 2, plus de drapeau AT.
-    assertion_data = auth_data(0x05, 2, credential_id, cose, False)
+    assertion_data = auth_data(0x05 if can_verify else 0x01, 2, credential_id, cose, False)
     get_client = client_data("webauthn.get", ORIGIN)
     signature = sign(key, hashlib.sha256(assertion_data).digest() + hashlib.sha256(get_client).digest(), alg)
 
@@ -170,7 +186,7 @@ def fixture(name, key, cose, alg, credential_id):
     replay = dict(assertion, sign_count=2)
 
     # Assertion avec une origine differente : compteur 3, seule l'origine est fausse.
-    origin_data = auth_data(0x05, 3, credential_id, cose, False)
+    origin_data = auth_data(0x05 if can_verify else 0x01, 3, credential_id, cose, False)
     evil_client = client_data("webauthn.get", "https://evil.example")
     signature_evil = sign(key, hashlib.sha256(origin_data).digest() + hashlib.sha256(evil_client).digest(), alg)
     bad_origin = dict(
@@ -183,7 +199,7 @@ def fixture(name, key, cose, alg, credential_id):
 
     # Signature calculee avec une autre cle : compteur 3, seule la signature est fausse.
     other = ec.generate_private_key(ec.SECP256R1()) if alg == "ES256" else rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    other_data = auth_data(0x05, 3, credential_id, cose, False)
+    other_data = auth_data(0x05 if can_verify else 0x01, 3, credential_id, cose, False)
     bad_signature = sign(other, hashlib.sha256(other_data).digest() + hashlib.sha256(get_client).digest(), alg)
     bad_signature_case = dict(
         assertion,
@@ -194,11 +210,51 @@ def fixture(name, key, cose, alg, credential_id):
 
     return {
         "name": name,
+        "policy": policy,
+        "user_verified": can_verify,
         "register": register,
         "assert": assertion,
         "replay": replay,
         "bad_origin": bad_origin,
         "bad_signature": bad_signature_case,
+        "bad_base": bad_base,
+    }
+
+
+def self_signed(key):
+    """Certificat d attestation auto-signe, en DER.
+
+    x5c est obligatoire dans le format fido-u2f : sans certificat il n'y a rien a
+    verifier, et ce format n'a pas d'auto-attestation. Une cle reelle remet un
+    certificat emis par la CA Yubico ; ici la chaine racine n'est pas fournie, donc le
+    verificateur PHP accepte le certificat comme une declaration, comme pour 'packed'.
+    L'identite de l'appareil vient du numero de serie : le format U2F n'a pas d'AAGUID.
+    """
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "qlip test attestation")])
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    builder = x509.CertificateBuilder().subject_name(name).issuer_name(name)
+    builder = builder.serial_number(12024).not_valid_before(now).not_valid_after(now)
+    builder = builder.public_key(key.public_key())
+
+    return builder.sign(key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+
+
+def u2f_case(key, cose, credential_id, data, create_client, cert):
+    """Signature faite sur le message WebAuthn, pas sur la base U2F.
+
+    La base U2F est 0x00 || rpIdHash || clientDataHash || credentialId || publicKeyU2F.
+    Le premier octet est un contre-signal (0x00 pour l'attestation, 0x01 pour l'assertion) :
+    une signature calculee sur hash(authData) + hash(clientData) doit etre refusee. C'est la
+    seule facon de montrer que le verificateur ne se contente pas de verifier une signature
+    sur n'importe quelle base.
+    """
+    message = hashlib.sha256(data).digest() + hashlib.sha256(create_client).digest()
+    statement = {"sig": key.sign(message, ec.ECDSA(hashes.SHA256())), "x5c": [cbor(cert)], "counter": 0}
+
+    return {
+        "attestation": b64url(cbor({"fmt": "fido-u2f", "authData": data, "attStmt": statement})),
+        "client_data": b64url(create_client),
     }
 
 
@@ -206,9 +262,40 @@ def main():
     ec_key = ec.generate_private_key(ec.SECP256R1())
     rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
+    # Cle U2F seule (YubiKey NEO) : fmt = fido-u2f, pas de CBOR, pas de verification
+    # utilisateur. Le harnais produit ce que le navigateur transmet au serveur apres
+    # conversion de la reponse de la cle.
+    u2f_key = ec.generate_private_key(ec.SECP256R1())
+    u2f_cose = cose_ec(u2f_key)
+    u2f_id = b"cred-u2f"
+    u2f_data = auth_data(0x41, 1, u2f_id, u2f_cose, True)
+    u2f_client = client_data("webauthn.create", ORIGIN)
+    u2f_cert = self_signed(u2f_key)
+    point = b"\x04" + u2f_cose[-4] + u2f_cose[-5]
+    u2f_message = (
+        b"\x00"
+        + hashlib.sha256(RP_ID.encode()).digest()
+        + hashlib.sha256(u2f_client).digest()
+        + u2f_id
+        + point
+    )
+    u2f_stmt = {"sig": u2f_key.sign(u2f_message, ec.ECDSA(hashes.SHA256())), "x5c": [cbor(u2f_cert)], "counter": 0}
+
     fixtures = [
         fixture("ec2_p256", ec_key, cose_ec(ec_key), "ES256", b"cred-ec2"),
         fixture("rsa2048", rsa_key, cose_rsa(rsa_key), "RS256", b"cred-rsa"),
+        fixture(
+            "fido_u2f",
+            u2f_key,
+            u2f_cose,
+            "ES256",
+            u2f_id,
+            policy="discouraged",
+            can_verify=False,
+            fmt="fido-u2f",
+            att_stmt=u2f_stmt,
+            bad_base=u2f_case(u2f_key, u2f_cose, u2f_id, u2f_data, u2f_client, u2f_cert),
+        ),
     ]
 
     print(json.dumps({"rp_id": RP_ID, "origin": ORIGIN, "challenge": b64url(CHALLENGE), "fixtures": fixtures}))

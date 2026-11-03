@@ -13,6 +13,7 @@ use Qlip\App\Session;
 use Qlip\Stl\Design;
 use Qlip\Stl\StlWriter;
 use Qlip\Stl\ThreeMfWriter;
+use Qlip\Webauthn\Policy;
 
 /**
  * Test d'ensemble de l'application, sans HTTP : schema SQLite, inscription,
@@ -737,6 +738,217 @@ check('session videe apres la suppression du compte', $app->session->get('user_i
 $trace = $app->db->one("SELECT user_id, detail FROM audit_log WHERE action = 'compte_supprime' ORDER BY id DESC LIMIT 1");
 
 check('trace de suppression du compte', $trace !== null && $trace['user_id'] === null && str_contains((string) $trace['detail'], 'compte-a-detruire@qlip.test'), (string) ($trace['detail'] ?? ''));
+
+// 18. Second facteur avec mot de passe. La cle prouve la possession, le mot de passe a deja
+// prouve l'utilisateur : la politique stockee par la credential est celle du profil
+// 'presence'. Une cle U2F ne peut pas satisfaire une ceremonie reglee en 'required', donc la
+// page d'administration reste fermee a une assertion passkey faite avec cette cle.
+$u2f = null;
+
+if (is_array($fixtures)) {
+    foreach ($fixtures['fixtures'] as $fixture2) {
+        if ($fixture2['name'] === 'fido_u2f') {
+            $u2f = $fixture2;
+        }
+    }
+}
+
+if ($u2f === null) {
+    check('fixture fido-u2f presente', false);
+} else {
+    $two = $app->users->register('2fa@qlip.test', 'un-mot-de-passe-long');
+    $twoUser = $two['user'];
+
+    check('compte 2fa verifie', $app->users->verifyToken($two['token']) !== null && (int) $twoUser['is_admin'] === 0);
+
+    // Sans credential, le mot de passe suffit encore : le second facteur ne s'applique qu'aux
+    // comptes qui ont une credential.
+    $app->session = new Session(['token' => random_token(16)], true);
+
+    $response = $send('POST', '/login', ['email' => '2fa@qlip.test', 'password' => 'un-mot-de-passe-long']);
+
+    check('connexion sans credential', $response->status() === 302, (string) $response->header('Location'));
+
+    // Le tableau de bord est la page qui propose l'enrolement d'un second facteur : c'est elle
+    // qui pose le profil sur la session, donc la politique ne vient pas du client.
+    $response = $send('GET', '/dashboard');
+
+    check('enrolement propose sur le tableau de bord', str_contains($response->body(), 'data-action="register"'));
+    check('profil pose par la page : presence', $app->ceremonyPolicy() === Policy::DISCOURAGED, $app->ceremonyPolicy());
+
+    // Le challenge de la fixture doit etre celui stocke en session.
+    $app->session->set('challenge', $fixtures['challenge']);
+
+    $response = $send('POST', '/webauthn/register', [
+        'credential_id' => $u2f['register']['credential_id'],
+        'attestation' => $u2f['register']['attestation'],
+        'client_data' => $u2f['register']['client_data'],
+    ]);
+
+    $data = json_decode($response->body(), true) ?: [];
+
+    check('enrolement d une cle U2F', $response->status() === 201, $data['error'] ?? $response->body());
+    check('politique stockee par la credential', ($data['credential']['policy'] ?? '') === Policy::DISCOURAGED, json_encode($data['credential'] ?? []));
+
+    $u2fRow = $app->db->one(
+        'SELECT * FROM webauthn_credentials WHERE credential_id = :credential_id',
+        [':credential_id' => $u2f['register']['credential_id']]
+    );
+
+    check('uv_seen a zero pour une cle U2F', (int) ($u2fRow['uv_seen'] ?? 0) === 0, json_encode($u2fRow));
+
+    // La politique stockee ne peut pas etre abaissee par le profil de la ceremonie : la meme
+    // cle refuse une ceremonie passkey. Elle ouvre la session par mot de passe + possession,
+    // elle ne peut pas ouvrir l'administration par une assertion seule.
+    try {
+        $app->credentials->assert(
+            $u2fRow,
+            $u2f['assert']['auth_data'],
+            $u2f['assert']['client_data'],
+            $u2f['assert']['signature'],
+            $fixtures['challenge'],
+            Policy::REQUIRED
+        );
+
+        check('la ceremonie passkey refuse la cle U2F', false);
+    } catch (Throwable $error) {
+        check('la ceremonie passkey refuse la cle U2F', true, $error->getMessage());
+    }
+
+    // Mot de passe valide, session en attente : elle ne donne aucun acces.
+    $app->session = new Session(['token' => random_token(16)], true);
+
+    $response = $send('POST', '/login', ['email' => '2fa@qlip.test', 'password' => 'un-mot-de-passe-long']);
+
+    check('second facteur demande apres le mot de passe', $response->status() === 302 && str_contains((string) $response->header('Location'), '/login/2fa'), (string) $response->header('Location'));
+    check('session en attente : aucune identite', $app->session->get('user_id') === null && (int) $app->session->get('pending_user_id', 0) === (int) $twoUser['id']);
+
+    $response = $send('GET', '/dashboard');
+
+    check('aucun acces avant la ceremonie', $response->status() === 302 && str_contains((string) $response->header('Location'), '/login'), (string) $response->header('Location'));
+
+    // La page du second facteur pose le profil 'presence' sur la session : la politique de la
+    // ceremonie ne vient pas du client. La cible de l assertion vient de la page, pas du script.
+    $response = $send('GET', '/login/2fa');
+
+    check('page du second facteur', $response->status() === 200 && str_contains($response->body(), 'data-action="assert"'));
+    check('la page vise la ceremonie du second facteur', str_contains($response->body(), 'data-assert="http://qlip.test/login/2fa"'));
+    check('profil pose par la page : presence', $app->ceremonyPolicy() === Policy::DISCOURAGED, $app->ceremonyPolicy());
+
+    $ceremony = static function (array $parts) use ($send): Response {
+        return $send('POST', '/login/2fa', $parts);
+    };
+
+    // La credential d'un autre compte ne peut pas ouvrir cette session : le controle
+    // d'appartenance est fait avant la ceremonie.
+    $other = $app->db->one(
+        'SELECT credential_id FROM webauthn_credentials WHERE user_id = :user_id LIMIT 1',
+        [':user_id' => (int) $admin['id']]
+    );
+
+    $response = $ceremony([
+        'credential_id' => (string) $other['credential_id'],
+        'auth_data' => $u2f['assert']['auth_data'],
+        'client_data' => $u2f['assert']['client_data'],
+        'signature' => $u2f['assert']['signature'],
+    ]);
+
+    $data = json_decode($response->body(), true) ?: [];
+
+    check('credential d un autre compte refusee', $response->status() === 403, $data['error'] ?? '');
+
+    // Le verrou est commun au mot de passe et au second facteur : 8 tentatives au total sur la
+    // session, la premiere etant la credential d'un autre compte. Une ceremonie refusee ne doit
+    // pas permettre de tester les credentials sans limite.
+    for ($i = 1; $i < 8; $i++) {
+        $send('POST', '/login/2fa', [
+            'credential_id' => (string) $other['credential_id'],
+            'auth_data' => $u2f['assert']['auth_data'],
+            'client_data' => $u2f['assert']['client_data'],
+            'signature' => $u2f['assert']['signature'],
+        ]);
+    }
+
+    $response = $ceremony([
+        'credential_id' => $u2f['register']['credential_id'],
+        'auth_data' => $u2f['assert']['auth_data'],
+        'client_data' => $u2f['assert']['client_data'],
+        'signature' => $u2f['assert']['signature'],
+    ]);
+
+    $data = json_decode($response->body(), true) ?: [];
+
+    check('verrou applique au second facteur', $response->status() === 429, $data['error'] ?? '');
+
+    // Jeton CSRF : la ceremonie est un POST, elle l'exige comme tout POST.
+    $app->session = new Session(['token' => random_token(16), 'pending_user_id' => (int) $twoUser['id']], true);
+
+    $response = $ceremony([
+        'csrf' => 'jeton different',
+        'credential_id' => $u2f['register']['credential_id'],
+        'auth_data' => $u2f['assert']['auth_data'],
+        'client_data' => $u2f['assert']['client_data'],
+        'signature' => $u2f['assert']['signature'],
+    ]);
+
+    $data = json_decode($response->body(), true) ?: [];
+
+    check('jeton CSRF exige par le second facteur', $response->status() === 400, $data['error'] ?? '');
+
+    // Sans mise en attente, la ceremonie refuse : une session authentifiee par le seul mot de
+    // passe ne peut pas etre confirmee par une assertion faite en dehors du parcours.
+    $app->session = new Session(['token' => random_token(16), 'user_id' => (int) $twoUser['id']], true);
+
+    $response = $ceremony([
+        'credential_id' => $u2f['register']['credential_id'],
+        'auth_data' => $u2f['assert']['auth_data'],
+        'client_data' => $u2f['assert']['client_data'],
+        'signature' => $u2f['assert']['signature'],
+    ]);
+
+    $data = json_decode($response->body(), true) ?: [];
+
+    check('ceremonie sans session en attente refusee', $response->status() === 401, $data['error'] ?? '');
+
+    // La ceremonie acceptee : la session devient celle du compte, et l'assertion est la trace
+    // que la page d'administration regarde.
+    $app->session = new Session(['token' => random_token(16), 'pending_user_id' => (int) $twoUser['id']], true);
+    $send('GET', '/login/2fa');
+    $app->session->set('challenge', $fixtures['challenge']);
+
+    $response = $ceremony([
+        'credential_id' => $u2f['register']['credential_id'],
+        'auth_data' => $u2f['assert']['auth_data'],
+        'client_data' => $u2f['assert']['client_data'],
+        'signature' => $u2f['assert']['signature'],
+    ]);
+
+    $data = json_decode($response->body(), true) ?: [];
+
+    check('second facteur accepte', $response->status() === 200 && ($data['ok'] ?? false) === true, $data['error'] ?? $response->body());
+    check('session confirmee par le second facteur', (int) $app->session->get('user_id', 0) === (int) $twoUser['id'] && $app->session->get('pending_user_id') === null);
+    check('trace de l assertion pour la page d administration', $app->session->get('webauthn_at') !== null);
+
+    $actions = [];
+
+    foreach ($app->db->all(
+        'SELECT action, COUNT(*) AS n FROM audit_log WHERE user_id = :user_id GROUP BY action ORDER BY action',
+        [':user_id' => (int) $twoUser['id']]
+    ) as $line) {
+        $actions[(string) $line['action']] = (int) $line['n'];
+    }
+
+    check('journal d audit du second facteur', $actions === [
+        'login' => 1,
+        'login_2fa' => 1,
+        'login_pending' => 1,
+        'register' => 1,
+        'verify' => 1,
+        'webauthn_assert' => 1,
+        'webauthn_assert_failed' => 8,
+        'webauthn_register' => 1,
+    ], json_encode($actions));
+}
 
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
 exit($failures === 0 ? 0 : 1);

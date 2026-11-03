@@ -29,6 +29,10 @@ const params = (element) => ({
     csrf: element.dataset.csrf,
     rpId: element.dataset.rp,
     base: element.dataset.base,
+    // La cible de l assertion depend de la page : la ceremonie d administration va a
+    // webauthn/assert, celle du second facteur a login/2fa. Le serveur la choisit, le
+    // script ne fait que lire ce que la page a pose.
+    assert: element.dataset.assert,
 });
 
 async function json(url, options) {
@@ -45,6 +49,9 @@ async function json(url, options) {
 async function getCeremony(element) {
     const { base } = params(element);
 
+    // La politique de verification utilisateur vient du serveur, par profil de ceremonie :
+    // le script ne peut pas choisir la sienne, sinon un client pourrait demander
+    // 'discouraged' sur une credential reglee en 'required'.
     return json(base + 'webauthn/challenge', { headers: { Accept: 'application/json' } });
 }
 
@@ -86,7 +93,10 @@ async function registerCredential(element) {
             attestation: 'none',
             authenticatorSelection: {
                 residentKey: 'preferred',
-                userVerification: 'required',
+                // Politique du serveur (Policy) : 'required' pour une passkey, 'discouraged'
+                // pour une cle U2F utilisee comme second facteur. 'preferred' ne se
+                // transforme en 'required' que si la cle a deja fait la verification.
+                userVerification: ceremony.policy || 'required',
                 // Pas de liste de transports : le hint est optionnel, et une YubiKey lue par
                 // le lecteur de cartes (smart-card) ou par NFC serait ecartee par une liste
                 // fermee. Le navigateur choisit le transport, et il doit ignorer les valeurs
@@ -117,8 +127,9 @@ async function registerCredential(element) {
 }
 
 async function assertCredential(element) {
-    const { csrf, base } = params(element);
+    const { csrf, base, assert } = params(element);
     const ceremony = await getCeremony(element);
+    const target = assert || base + 'webauthn/assert';
 
     // La liste des credentials du compte vient du serveur : une cle qui ne stocke pas la
     // credential en resident (non discoverable) ne peut pas retrouver son identifiant seule,
@@ -129,7 +140,7 @@ async function assertCredential(element) {
         rpId: ceremony.rpId,
         challenge: fromBase64Url(ceremony.challenge),
         timeout: 60000,
-        userVerification: 'required',
+        userVerification: ceremony.policy || 'required',
         allowCredentials: allow,
     });
 
@@ -137,7 +148,7 @@ async function assertCredential(element) {
         throw new Error('Ceremonie interrompue.');
     }
 
-    const data = await json(base + 'webauthn/assert', {
+    const data = await json(target, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -149,7 +160,7 @@ async function assertCredential(element) {
         }),
     });
 
-    report(element, 'YubiKey acceptee.');
+    report(element, 'Cle acceptee.');
     return data;
 }
 

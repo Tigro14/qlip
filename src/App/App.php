@@ -9,6 +9,7 @@ use Qlip\Services\Badges;
 use Qlip\Services\Credentials;
 use Qlip\Services\Mailer;
 use Qlip\Services\Users;
+use Qlip\Webauthn\Policy;
 
 /**
  * Conteneur : config, base, services. Les controllers ne recoivent que cela.
@@ -49,6 +50,43 @@ final class App
         $userId = (int) $this->session->get('user_id', 0);
 
         return $userId > 0 ? $this->users->find($userId) : null;
+    }
+
+    /**
+     * Compte en attente de second facteur : le mot de passe est valide, la ceremonie
+     * n'est pas faite. Cette session ne donne aucun acces tant que la cle n'a pas
+     * prouve sa possession.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function pendingUser(): ?array
+    {
+        $userId = (int) $this->session->get('pending_user_id', 0);
+
+        return $userId > 0 ? $this->users->find($userId) : null;
+    }
+
+    /**
+     * Politique de verification utilisateur pour la ceremonie en cours.
+     *
+     * Le profil est pose par le serveur, quand la page de la ceremonie est rendue :
+     * le navigateur ne peut pas choisir la sienne. Elle est garde en session parce que
+     * la ceremonie se fait en deux requetes : les options, puis la reponse de
+     * l'authenticateur.
+     *
+     *   - 'presence' : le mot de passe a deja prouve l'utilisateur, la cle prouve la
+     *     possession. C'est le profil du second facteur et de l'enrolement depuis le
+     *     tableau de bord ;
+     *   - 'passkey' : la cle est le seul moyen d'identifier l'utilisateur (page
+     *     d'administration), donc la verification utilisateur reste exigee.
+     */
+    public function ceremonyPolicy(?string $profile = null): string
+    {
+        if ($profile !== null) {
+            $this->session->set('ceremony_profile', Policy::forProfile($profile));
+        }
+
+        return Policy::normalize((string) $this->session->get('ceremony_profile', Policy::forProfile(Policy::PROFILE_PASSKEY)));
     }
 
     /** @param array<string, string> $flash */

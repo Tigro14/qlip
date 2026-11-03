@@ -11,10 +11,15 @@ namespace Qlip\Webauthn;
  * Les controles : challenge, origine, ID de relying party, drapeaux UP/UV/AT,
  * compteur de signature, signature ECDSA ou RSA.
  *
- * Attestation : 'none' (auto-attestation) et 'packed' (signature sur les donnees
- * d'authentification, avec ou sans chaine x5c). Une chaine racine est optionnelle :
- * sans elle, 'packed' avec x5c est accepte comme une declaration (le controle
- * d'origine et du compteur reste fait).
+ * Attestation : 'none' (auto-attestation), 'packed' (signature sur les donnees
+ * d'authentification, avec ou sans chaine x5c) et 'fido-u2f' (une cle U2F seule,
+ * comme la YubiKey NEO, ne produit que ce format : signature + chaine x5c, et une
+ * base de signature distincte). Une chaine racine est optionnelle : sans elle,
+ * l'attestation est acceptee comme une declaration (le controle d'origine et du
+ * compteur reste fait).
+ *
+ * La politique de verification utilisateur vient du profil de ceremonie (voir
+ * Policy) : elle n'est pas laisse au choix du navigateur.
  */
 final class Verifier
 {
@@ -29,10 +34,14 @@ final class Verifier
     /**
      * Enregistrement d'une credential.
      *
-     * @return array{credential_id: string, cose: string, sign_count: int, aaguid: string, fmt: string, attested: bool}
+     * @return array{credential_id: string, cose: string, sign_count: int, aaguid: string, fmt: string, attested: bool, policy: string, user_verified: bool}
      */
-    public function verifyRegistration(string $attestationB64url, string $clientDataB64url, string $challengeB64url): array
-    {
+    public function verifyRegistration(
+        string $attestationB64url,
+        string $clientDataB64url,
+        string $challengeB64url,
+        string $policy = Policy::REQUIRED
+    ): array {
         $object = Cbor::decode(base64url_decode($attestationB64url));
 
         if (!is_array($object)) {
@@ -59,12 +68,24 @@ final class Verifier
         $this->checkClientData($clientDataRaw, $challengeB64url, 'webauthn.create');
         $this->checkRpIdHash($data->rpIdHash);
 
+        $policy = Policy::normalize($policy);
+        $verified = $data->has(AuthenticatorData::FLAG_UV);
+
+        if (Policy::enforces($policy, $verified) && !$verified) {
+            throw new \InvalidArgumentException('Verification utilisateur absente : politique ' . $policy . '.');
+        }
+
         $message = hash('sha256', $authData, true) . hash('sha256', $clientDataRaw, true);
 
         $attested = false;
 
         if ($format === 'packed' && !empty($statement['sig'])) {
             $attested = $this->verifyAttestation($statement, $message, $data);
+        } elseif ($format === 'fido-u2f') {
+            // La base de signature n'est pas la meme ici : voir verifyU2fAttestation.
+            // Une signature calculee sur le message WebAuthn ne passe pas, et c'est
+            // justement ce que verifie le harnais avec le cas 'bad_base'.
+            $attested = $this->verifyU2fAttestation($statement, $data, $clientDataRaw);
         } elseif ($format !== 'none') {
             throw new \InvalidArgumentException('Format d attestation non supporte : ' . $format);
         }
@@ -76,21 +97,24 @@ final class Verifier
             'aaguid' => bin2hex($data->aaguid),
             'fmt' => $format,
             'attested' => $attested,
+            'policy' => $policy,
+            'user_verified' => $verified,
         ];
     }
 
     /**
      * Assertion (login).
      *
-     * @param array{credential_id: string, cose: string, sign_count: int} $credential
-     * @return array{credential_id: string, sign_count: int}
+     * @param array{credential_id: string, cose: string, sign_count: int, policy?: string, uv_seen?: bool} $credential
+     * @return array{credential_id: string, sign_count: int, policy: string, user_verified: bool}
      */
     public function verifyAssertion(
         string $authDataB64url,
         string $clientDataB64url,
         string $signatureB64url,
         array $credential,
-        string $challengeB64url
+        string $challengeB64url,
+        string $policy = Policy::REQUIRED
     ): array {
         $authData = base64url_decode($authDataB64url);
         $clientDataRaw = base64url_decode($clientDataB64url);
@@ -109,6 +133,16 @@ final class Verifier
         $this->checkClientData($clientDataRaw, $challengeB64url, 'webauthn.get');
         $this->checkRpIdHash($data->rpIdHash);
 
+        // La politique de la ceremonie ne peut pas descendre en dessous de celle de la
+        // credential : une credential enregistree sous un profil fort garde cette
+        // politique, meme quand la ceremonie se fait sous le profil presence.
+        $effective = Policy::strongest(Policy::normalize($policy), Policy::normalize((string) ($credential['policy'] ?? Policy::REQUIRED)));
+        $verified = $data->has(AuthenticatorData::FLAG_UV);
+
+        if (Policy::enforces($effective, $verified || (bool) ($credential['uv_seen'] ?? false)) && !$verified) {
+            throw new \InvalidArgumentException('Verification utilisateur exigee par la politique ' . $effective . '.');
+        }
+
         $stored = (int) $credential['sign_count'];
 
         // Certains authenticateurs (U2F) n incrementent pas le compteur : on
@@ -124,7 +158,12 @@ final class Verifier
             throw new \InvalidArgumentException('Signature invalide.');
         }
 
-        return ['credential_id' => $credential['credential_id'], 'sign_count' => $data->signCount];
+        return [
+            'credential_id' => $credential['credential_id'],
+            'sign_count' => $data->signCount,
+            'policy' => $effective,
+            'user_verified' => $verified,
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -146,7 +185,7 @@ final class Verifier
      * @param array<string, mixed> $statement
      * @return bool
      */
-    private function verifyAttestation(array $statement, string $message, AuthenticatorData $data): bool
+    private function verifyAttestation(array $statement, string $message, AuthenticatorData $data, bool $der = false): bool
     {
         $signature = (string) $statement['sig'];
         $certificates = is_array($statement['x5c'] ?? null) ? $statement['x5c'] : [];
@@ -167,7 +206,7 @@ final class Verifier
 
             $alg = (string) ($statement['alg'] ?? 'RS256');
 
-            if (!Signature::verify($message, $signature, ['key' => $details['key'], 'alg' => $alg, 'type' => 'cert'])) {
+            if (!Signature::verify($message, $signature, ['key' => $details['key'], 'alg' => $alg, 'type' => 'cert'], $der)) {
                 return false;
             }
 
@@ -179,11 +218,68 @@ final class Verifier
         }
 
         // Packed sans certificat : auto-attestation, la cle de la credential a pu
-        // etre changee par rapport a celle de l attestation, donc on ne la vérifie
+        // etre changee par rapport a celle de l attestation, donc on ne la verifie
         // que si elle correspond.
         $key = CoseKey::toPem($data->cose);
 
         return Signature::verify($message, $signature, $key);
+    }
+
+    /**
+     * Attestation U2F (fmt = 'fido-u2f'), la seule que produit une cle U2F seule
+     * (YubiKey NEO) : la cle ne sait pas faire CBOR, donc elle n'emmet ni 'none' ni
+     * 'packed'. Le navigateur, qui sait faire les deux, convertit la reponse de la
+     * cle en objet d'attestation avec les memes cles fmt, attStmt, authData.
+     *
+     * La base de signature est particuliere :
+     *   0x00 || rpIdHash || clientDataHash || credentialId || publicKeyU2F
+     * avec publicKeyU2F = 0x04 || x || y, le point COSE de la credential. Ce n'est
+     * pas le message WebAuthn hash(authData) + hash(clientData) : le premier octet
+     * est un contre-signal fixe (0x00 pour l'attestation, 0x01 pour l'assertion).
+     * Une signature calculee sur l'autre base ne passe pas, et c'est ce que verifie
+     * le harnais avec le cas 'bad_base'.
+     *
+     * x5c est obligatoire ici : sans certificat il n'y a rien a verifier, et ce
+     * format n'a pas d'auto-attestation. Le certificat est accepte comme une
+     * declaration quand aucune racine n'est fournie, comme pour 'packed'. L'identite
+     * de l'appareil vient du numero de serie du certificat : il n'y a pas d'AAGUID
+     * dans U2F, donc aucune decision d'administration ne peut se prendre sur la cle.
+     *
+     * @param array<string, mixed> $statement
+     */
+    private function verifyU2fAttestation(array $statement, AuthenticatorData $data, string $clientDataRaw): bool
+    {
+        $signature = (string) ($statement['sig'] ?? '');
+        $certificates = is_array($statement['x5c'] ?? null) ? $statement['x5c'] : [];
+
+        if ($signature === '' || $certificates === []) {
+            throw new \InvalidArgumentException('Attestation fido-u2f sans signature ou sans certificat x5c.');
+        }
+
+        // Le contre-signal : il vaut 0 dans le map CBOR d'attestation, le vrai
+        // compteur est lu dans les 4 octets d'AuthData.
+        if (isset($statement['counter']) && (int) $statement['counter'] !== 0) {
+            throw new \InvalidArgumentException('Compteur d attestation U2F autre que 0.');
+        }
+
+        // Une cle U2F signe en EC2/P-256 : le format fido-u2f n a pas d autre courbe.
+        if ((string) ($data->cose['-3'] ?? '') !== 'P-256') {
+            throw new \InvalidArgumentException('Courbe d attestation U2F autre que P-256.');
+        }
+
+        $message = "\x00"
+            . $data->rpIdHash
+            . hash('sha256', $clientDataRaw, true)
+            . $data->credentialId
+            . CoseKey::x962($data->cose);
+
+        // La signature d attestation doit verifier : x5c n est pas optionnel dans ce
+        // format, donc il n y a pas de cas « declaration » comme pour 'packed'.
+        if (!$this->verifyAttestation($statement, $message, $data, true)) {
+            throw new \InvalidArgumentException('Signature d attestation U2F invalide.');
+        }
+
+        return true;
     }
 
     private function checkClientData(string $raw, string $challengeB64url, string $expectedType): void

@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 import stl_check
 import webauthn_fixture as wf
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
 OUT = os.environ.get("QLIP_OUT", "/tmp/opencode/badge")
@@ -182,18 +183,27 @@ def start_server():
 
 
 class FakeAuthenticator:
-    """Une YubiKey : cle EC2/P-256, ceremonies preparees pour un challenge donne."""
+    """Une YubiKey : cle EC2/P-256, ceremonies preparees pour un challenge donne.
 
-    def __init__(self, credential_id):
+    `can_verify` = la cle sait faire la verification utilisateur. Une cle U2F seule
+    (YubiKey NEO) ne la sait pas faire : le drapeau UV n est pas pose, et elle ne produit
+    que le format d attestation fido-u2f.
+    """
+
+    def __init__(self, credential_id, can_verify=True):
         self.key = ec.generate_private_key(ec.SECP256R1())
         self.cose = wf.cose_ec(self.key)
         self.credential_id = credential_id
+        self.can_verify = can_verify
+
+    def flags(self, base):
+        return base | 0x04 if self.can_verify else base
 
     def digest(self, auth_data, client_data):
         return hashlib.sha256(auth_data).digest() + hashlib.sha256(client_data).digest()
 
     def register(self, challenge, fmt="none"):
-        auth_data = wf.auth_data(0x45, 1, self.credential_id, self.cose, True, RP_ID)
+        auth_data = wf.auth_data(self.flags(0x41), 1, self.credential_id, self.cose, True, RP_ID)
         client_data = wf.client_data("webauthn.create", ORIGIN, challenge)
 
         statement = {}
@@ -207,8 +217,40 @@ class FakeAuthenticator:
             "client_data": wf.b64url(client_data),
         }
 
+    def register_u2f(self, challenge):
+        """Ceremonie d une cle U2F seule : fmt = fido-u2f, x5c obligatoire, signature en DER.
+
+        La base de signature est 0x00 || rpIdHash || clientDataHash || credentialId ||
+        publicKeyU2F, pas hash(authData) + hash(clientData). Le premier octet est le
+        contre-signal (0x00 pour l attestation). Une signature faite sur l autre base ne
+        passe pas : c est ce que verifie le harnais.
+        """
+        auth_data = wf.auth_data(self.flags(0x41), 1, self.credential_id, self.cose, True, RP_ID)
+        client_data = wf.client_data("webauthn.create", ORIGIN, challenge)
+        point = b"\x04" + self.cose[-4] + self.cose[-5]
+        message = (
+            b"\x00"
+            + hashlib.sha256(RP_ID.encode()).digest()
+            + hashlib.sha256(client_data).digest()
+            + self.credential_id
+            + point
+        )
+
+        statement = {
+            "alg": -7,
+            "sig": self.key.sign(message, ec.ECDSA(hashes.SHA256())),
+            "x5c": [wf.cbor(wf.self_signed(self.key))],
+            "counter": 0,
+        }
+
+        return {
+            "credential_id": wf.b64url(self.credential_id),
+            "attestation": wf.b64url(wf.cbor({"fmt": "fido-u2f", "authData": auth_data, "attStmt": statement})),
+            "client_data": wf.b64url(client_data),
+        }
+
     def assert_(self, challenge, sign_count):
-        auth_data = wf.auth_data(0x05, sign_count, self.credential_id, self.cose, False, RP_ID)
+        auth_data = wf.auth_data(self.flags(0x01), sign_count, self.credential_id, self.cose, False, RP_ID)
         client_data = wf.client_data("webauthn.get", ORIGIN, challenge)
 
         return {
@@ -367,6 +409,8 @@ def run():
 
     check("app.js : objet d attestation lu par getAttestation()", "getAttestation()" in script, "la methode de l API, pas un helper invente")
     check("app.js : liste de credentials prise du challenge", "ceremony.allowCredentials" in script, "une cle non resident ne retrouve pas son identifiant seule")
+    check("app.js : politique lue des options du serveur", "ceremony.policy" in script, "le client ne choisit pas sa politique de verification")
+    check("app.js : cible d assertion prise de la page", "element.dataset.assert" in script, "la ceremonie du second facteur ne va pas a celle d administration")
     check(
         "app.js : aucune fonction appelee sans etre definie",
         called <= defined | known,
@@ -469,6 +513,136 @@ def run():
 
     check("non admin refuse", status == 403, data.get("error", ""))
 
+    # 10b. Second facteur avec mot de passe, sur HTTP. Le mot de passe prouve l'utilisateur, la
+    # cle prouve sa possession : le profil est 'presence', donc la politique est 'discouraged'.
+    # Une cle U2F seule ne sait pas faire la verification utilisateur, donc elle ne peut pas
+    # satisfaire une ceremonie reglee en 'required' (le profil passkey de la page d'administration).
+    two = client(http.cookiejar.CookieJar())
+
+    status, _, body = post("/register", {"csrf": csrf_of(get("/register", two)[2]), "email": "2fa@qlip.test", "password": "un-mot-de-passe-long"}, two)
+
+    check("inscription 2fa", status == 200)
+    check("verification 2fa", get("/verify/" + link_of(body), two)[0] == 200)
+
+    status, headers, _ = post("/login", {"csrf": csrf_of(get("/login", two)[2]), "email": "2fa@qlip.test", "password": "un-mot-de-passe-long"}, two)
+
+    # Pas encore de credential : le mot de passe suffit. Le second facteur ne s applique qu aux
+    # comptes qui ont une credential.
+    check("connexion 2fa sans credential", status == 302, headers.get("location", ""))
+
+    status, _, body = get("/dashboard", two)
+
+    # C est la page qui rend la ceremonie qui pose le profil : le client ne peut pas choisir sa
+    # politique, sinon il aurait une assertion sur une credential reglee en required.
+    check("enrolement propose sur le tableau de bord", b'data-action="register"' in body)
+    two_csrf = csrf_of(body)
+
+    status, ceremony = get_json("/webauthn/challenge", two)
+
+    check("profil de la ceremonie : presence", status == 200 and ceremony.get("policy") == "discouraged", str(ceremony.get("policy", "")))
+
+    u2f = FakeAuthenticator(b"claie-u2f", can_verify=False)
+    status, data = post_json("/webauthn/register", dict(csrf=two_csrf, **u2f.register_u2f(b64url_decode(ceremony["challenge"]))), two)
+
+    check("enrolement d une cle U2F", status == 201, data.get("error", ""))
+    check("politique stockee par la credential", data.get("credential", {}).get("policy") == "discouraged", json.dumps(data.get("credential", {})))
+
+    status, headers, _ = post("/logout", {"csrf": two_csrf}, two)
+
+    check("deconnexion 2fa", status == 302)
+
+    status, headers, _ = post("/login", {"csrf": csrf_of(get("/login", two)[2]), "email": "2fa@qlip.test", "password": "un-mot-de-passe-long"}, two)
+
+    check("second facteur demande apres le mot de passe", status == 302 and "/login/2fa" in headers.get("location", ""), headers.get("location", ""))
+
+    status, headers, _ = get("/dashboard", two)
+
+    # La session en attente ne donne aucun acces : le mot de passe seul ne confirme pas la session.
+    check("aucun acces avant la ceremonie", status == 302 and "/login" in headers.get("location", ""), headers.get("location", ""))
+
+    status, _, body = get("/login/2fa", two)
+
+    check("page du second facteur", status == 200 and b'data-action="assert"' in body)
+    check("la page pose sa cible d assertion", b'data-assert="http://127.0.0.1:%d/login/2fa"' % PORT in body)
+
+    two_csrf = csrf_of(body)
+    status, ceremony = get_json("/webauthn/challenge", two)
+
+    check("politique du challenge pour la session en attente", ceremony.get("policy") == "discouraged", str(ceremony.get("policy", "")))
+    check("allowCredentials du compte en attente", [entry.get("id") for entry in ceremony.get("allowCredentials", [])] == [wf.b64url(u2f.credential_id)], json.dumps(ceremony.get("allowCredentials", [])))
+
+    assertion = u2f.assert_(b64url_decode(ceremony["challenge"]), 2)
+    foreign = dict(assertion, credential_id=wf.b64url(b"claie-normal"))
+
+    status, data = post_json("/login/2fa", dict(csrf=two_csrf, **foreign), two)
+
+    check("credential d un autre compte refusee", status == 403, data.get("error", ""))
+
+    # Le verou est commun au mot de passe et au second facteur : 8 tentatives au total sur la
+    # session, la premiere etant la credential d un autre compte. Sans lui, une ceremonie refusee
+    # servirait a tester les credentials sans limite.
+    for _ in range(7):
+        post_json("/login/2fa", dict(csrf=two_csrf, **foreign), two)
+
+    status, data = post_json("/login/2fa", dict(csrf=two_csrf, **assertion), two)
+
+    check("verou applique au second facteur", status == 429, data.get("error", ""))
+
+    # Ceremonie acceptee sur une session neuve : la cle qui prouve la possession confirme la
+    # session, et la politique stockee par la credential est gardee.
+    two = client(http.cookiejar.CookieJar())
+
+    status, headers, _ = post("/login", {"csrf": csrf_of(get("/login", two)[2]), "email": "2fa@qlip.test", "password": "un-mot-de-passe-long"}, two)
+
+    check("second facteur demande (session neuve)", status == 302, headers.get("location", ""))
+
+    two_csrf = csrf_of(get("/login/2fa", two)[2])
+    status, ceremony = get_json("/webauthn/challenge", two)
+    status, data = post_json("/login/2fa", dict(csrf=two_csrf, **u2f.assert_(b64url_decode(ceremony["challenge"]), 2)), two)
+
+    check("second facteur accepte", status == 200 and data.get("ok") is True, data.get("error", ""))
+    check("la ceremonie renvoie la redirection", str(data.get("redirect", "")).endswith("/dashboard"), json.dumps(data))
+    check("tableau de bord apres le second facteur", get("/dashboard", two)[0] == 200)
+
+    # La politique ne peut pas etre abaissee par le profil : la page d administration rend le
+    # profil passkey, donc la meme cle est refusee sur cette ceremonie. Un compte non
+    # administrateur reste refuse, et un administrateur dont la seule cle est une cle U2F entre par
+    # mot de passe + possession, pas par une assertion seule.
+    admin = client(http.cookiejar.CookieJar())
+
+    status, headers, _ = post("/login", {"csrf": csrf_of(get("/login", admin)[2]), "email": "admin@qlip.test", "password": "un-mot-de-passe-long"}, admin)
+
+    check("second facteur demande pour l admin", status == 302 and "/login/2fa" in headers.get("location", ""), headers.get("location", ""))
+
+    admin_csrf = csrf_of(get("/login/2fa", admin)[2])
+    status, ceremony = get_json("/webauthn/challenge", admin)
+    status, data = post_json("/login/2fa", dict(csrf=admin_csrf, **yubikey.assert_(b64url_decode(ceremony["challenge"]), 3)), admin)
+
+    check("second facteur accepte pour l admin", status == 200 and data.get("ok") is True, data.get("error", ""))
+
+    status, _, body = get("/dashboard", admin)
+
+    admin_csrf = csrf_of(body)
+    status, ceremony = get_json("/webauthn/challenge", admin)
+    u2f_admin = FakeAuthenticator(b"claie-u2f-admin", can_verify=False)
+    status, data = post_json("/webauthn/register", dict(csrf=admin_csrf, **u2f_admin.register_u2f(b64url_decode(ceremony["challenge"]))), admin)
+
+    check("cle U2F enregistree pour l admin", status == 201, data.get("error", ""))
+
+    status, _, body = get("/admin/yubikey", admin)
+
+    admin_csrf = csrf_of(body)
+    status, ceremony = get_json("/webauthn/challenge", admin)
+
+    check("profil de la page d administration : passkey", ceremony.get("policy") == "required", str(ceremony.get("policy", "")))
+
+    status, data = post_json("/webauthn/assert", dict(csrf=admin_csrf, **u2f_admin.assert_(b64url_decode(ceremony["challenge"]), 2)), admin)
+
+    check("la cle U2F ne satisfait pas la ceremonie passkey", status == 400 and "Verification utilisateur" in data.get("error", ""), data.get("error", ""))
+
+    status, _, _ = get("/admin", admin)
+
+    check("administration ouverte par mot de passe + possession", status == 200, str(status))
 
     # 11. Suppression : elle est definitive, donc jeton CSRF + confirmation explicite, et le
     # mot de passe pour le compte. Une autre session (un autre compte) ne peut rien detruire,

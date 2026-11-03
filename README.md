@@ -163,6 +163,67 @@ Le navigateur fait la ceremony (`navigator.credentials`), PHP verifie :
 La page `/admin` n'est accessible qu'avec une session confirmee par une assertion
 (`webauthn_at` en session), sur un compte marque administrateur.
 
+### Deux profils de ceremonie
+
+La politique de verification utilisateur (`userVerification`) est choisie par le serveur,
+par profil de ceremonie, jamais par le navigateur : sinon un client pourrait demander
+`discouraged` et obtenir une assertion sur une credential reglee en `required`. Le profil
+est pose par la page qui rend la ceremonie, et la politique est stockee par credential au
+moment de l'enregistrement, donc elle ne change plus.
+
+| Profil | Niveau | Ou | Pourquoi |
+| --- | --- | --- | --- |
+| `presence` | `discouraged` | second facteur, enrolement depuis le tableau de bord | le mot de passe a deja prouve l'utilisateur, la cle prouve la possession |
+| `passkey` | `required` | page d'administration | la cle est le seul moyen d'identifier l'utilisateur |
+
+A l'assertion, la politique effective est la plus forte des deux : la politique du profil
+et celle stockee par la credential. Une credential enregistree sous `required` ne peut donc
+pas etre utilisee sous le profil `presence`, et `preferred` continue d'exiger la
+verification des que la cle l'a faite une fois (`uv_seen`) : le niveau laisse le choix a la
+cle une fois, pas a chaque fois quand elle est capable de la faire.
+
+Consequence pour une cle U2F seule (YubiKey NEO, `authenticatorGetInfo` sans le drapeau
+CBOR, capacites `0x01` = clin d'oeil seulement) : elle ne sait pas faire la verification
+utilisateur, donc elle ne peut satisfaire que `discouraged`. Elle ouvre la session par mot de
+passe + possession, elle ne peut pas ouvrir `/admin` par une assertion seule. Une cle capable
+de la faire (YubiKey 5 en FIDO2) doit etre enregistree depuis la page d'administration.
+
+### Second facteur avec mot de passe
+
+Quand le compte a une credential, le mot de passe ne suffit plus :
+
+1. `POST /login` : si le mot de passe est valide et le compte a une credential, la session est
+   mise en attente (`pending_user_id`) et redirige vers `GET /login/2fa`. Cette session ne
+   donne aucun acces.
+2. `POST /login/2fa` : la ceremony. La credential doit appartenir au compte en attente, et le
+   verrou est le meme que celui du mot de passe (8 tentatives par session, puis 300 s) : sinon
+   une ceremony refusee servirait a tester les credentials sans limite.
+3. L'assertion acceptee confirme la session (`webauthn_at`) et la marque `login_2fa` dans
+   `audit_log` ; l'evenement du mot de passe est `login_pending`, donc le journal distingue les
+   deux etapes par compte.
+
+Une cle U2F ne stocke pas la credential en resident : la liste `allowCredentials` vient du
+serveur, la cle ne peut pas retrouver son identifiant seule. Elle n'a pas d'AAGUID non plus :
+l'identite de l'appareil vient du numero de serie du certificat `x5c`, donc aucune decision
+d'administration ne peut se prendre sur la cle.
+
+### Format d'attestation fido-u2f
+
+Une cle U2F seule ne produit que ce format : elle ne sait pas faire CBOR, donc elle n'emmet
+ni `none` ni `packed`. Le navigateur convertit la reponse de la cle en objet d'attestation
+avec les memes cles `fmt`, `attStmt`, `authData`. La base de signature est particuliere :
+
+```
+0x00 || rpIdHash || clientDataHash || credentialId || publicKeyU2F
+```
+
+avec `publicKeyU2F = 0x04 || x || y`, le point COSE de la credential. Ce n'est pas le message
+WebAuthn `hash(authData) + hash(clientData)` : le premier octet est un contre-signal fixe
+(`0x00` pour l'attestation, `0x01` pour l'assertion). La signature arrive deja en DER, alors
+que celle d'une assertion recue du navigateur est brute `r||s`. `x5c` est obligatoire ici :
+sans certificat il n'y a rien a verifier, ce format n'a pas d'auto-attestation. Le harnais
+verifie la base avec le cas `bad_base` : une signature calculee sur l'autre base est refusee.
+
 ### Enrolement initial de la YubiKey
 
 L'enrolement se fait une fois par cle et par origine, dans un navigateur : c'est le
@@ -189,11 +250,13 @@ navigateur qui parle au token, PHP ne fait que verifier la reponse. La ceremony
    `Enregistrer la YubiKey` est affiche pour un compte administrateur. Touche le token
    (ou donne son PIN) quand le navigateur le demande : `userVerification` est `required`
    et `residentKey` est `preferred`, donc la cle est decouvrable et pourra retrouver le
-   compte sans mot de passe ensuite.
+   compte sans mot de passe ensuite. Depuis le tableau de bord le profil est `presence`
+   (`discouraged`) : c'est la que la cle d'un second facteur est enregistree, et c'est le
+   seul profil qu'une cle U2F seule peut satisfaire.
 
 4. La ceremony `navigator.credentials.create()` envoie l'attestation en base64url a
-   `POST /webauthn/register` : les formats acceptes sont `none` et `packed` (une
-   reponse `fido-u2f`, `android-key` ou `apple` est refusee). La cle COSE, l'ID de
+   `POST /webauthn/register` : les formats acceptes sont `none`, `packed` et `fido-u2f`
+   (une reponse `android-key` ou `apple` est refusee). La cle COSE, l'ID de
    credential et le compteur sont stockes en base. Avec `QLIP_ATTESTATION_ROOTS` (PEM
    d'une racine, par exemple le certificat racine de Yubico), la chaine `x5c` est remontee
    jusqu'a cette racine ; sans elle, `packed` avec `x5c` est accepte comme une declaration.
@@ -212,9 +275,11 @@ origine qui ne correspond pas au `rpId`. Les causes, dans l'ordre ou on les ecar
 1. `rpId` : il doit etre l'hote de l'origine qui appelle `navigator.credentials`. Si
    `QLIP_BASE_URL` est laisse a son defaut (`http://localhost:8080`) derriere un nom de domaine,
    le navigateur refuse avant de parler au token. `tests/live.sh` verifie ce point.
-2. `userVerification: 'required'` : la clef doit pouvoir verifier l'utilisateur (PIN). Une clef
-   en mode U2F (CTAP1) ne le peut pas et est ecartee par le critere. Avec une YubiKey 5 en
-   FIDO2, saisis le PIN (defaut `1234` sur une clef neuve).
+2. `userVerification` : la clef doit pouvoir verifier l'utilisateur (PIN) quand la politique
+   est `required`, ce qui est le profil `passkey` de la page d'administration. Une clef en mode
+   U2F (CTAP1) ne le peut pas et est ecartee par le critere sur ce profil ; elle est acceptee
+   sur le profil `presence` (`discouraged`), ou l'authentifiant est choisi par le mot de passe.
+   Avec une YubiKey 5 en FIDO2, saisis le PIN (defaut `1234` sur une clef neuve).
 3. Transports : aucune liste n'est envoyee, le navigateur choisit. Une clef vue comme carte a
    puce (`smart-card`) ou par NFC serait ecartee par une liste fermee.
 4. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
@@ -225,6 +290,10 @@ En resume : inscription avec l'adresse d'administration, verification d'email, c
 par mot de passe, enregistrement de la cle, assertion, `/admin`. Le mot de passe ne sert
 plus ensuite qu'a enregistrer une autre cle (bouton `Enregistrer une YubiKey` sur la page
 d'administration) ou a reprendre la main si la cle est perdue.
+
+Pour un compte ordinaire avec une cle enregistree depuis le tableau de bord, le parcours est
+le meme dans l'ordre inverse : mot de passe, puis possession de la cle (`/login/2fa`). La cle
+ne remplace pas le mot de passe, elle s'y ajoute.
 
 ## Badges STL
 
@@ -337,7 +406,7 @@ src/Controllers/ Auth, Pages, Badges, Admin
 src/Services/    Users, Badges, Credentials, Mailer
 src/Qr/          encodeur QR (Reed-Solomon, masks, penalites) + rendus SVG/PNG/ASCII
 src/Stl/         Mesh, Triangulator, Design, Badge, StlWriter, ThreeMfWriter
-src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Verifier
+src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Policy, Verifier
 src/Support/     helpers (base64url, echappement, jetons)
 templates/       vues HTML
 tests/           suite de tests (PHP + Python)

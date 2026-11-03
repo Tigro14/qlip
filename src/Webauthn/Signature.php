@@ -10,12 +10,17 @@ namespace Qlip\Webauthn;
  */
 final class Signature
 {
-    /** @return array{key: string, alg: string, type: string} */
-    public static function verify(string $message, string $signature, array $key): bool
+    /**
+     * @param array{key: string, alg: string, type: string} $key
+     * @param bool $der La signature est deja en DER. Le format fido-u2f signe en DER
+     *   (Ecdsa-Sig-Value, confirme par les references fdl et webauthn-rs), alors que la
+     *   signature d assertion recue du navigateur arrive brute r || s.
+     */
+    public static function verify(string $message, string $signature, array $key, bool $der = false): bool
     {
         // Une signature ECDSA arrive brute (r || s) depuis le navigateur ; RSA
         // arrive deja en DER.
-        if (str_starts_with($key['alg'], 'ES')) {
+        if (!$der && str_starts_with($key['alg'], 'ES')) {
             $signature = self::toDer($signature, intdiv(strlen($signature), 2));
         }
 

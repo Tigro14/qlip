@@ -80,6 +80,31 @@ final class Db
         foreach (self::statements() as $sql) {
             $this->pdo->exec($sql);
         }
+
+        // Colonnes ajoutees apres la premiere version du schema : une base existante
+        // n'est jamais reconstruite, seulement completee. La politique par credential
+        // et la trace de la premiere verification utilisateur sont lues par Verifier a
+        // chaque assertion, donc une base creee avant doit les avoir.
+        $columns = $this->columns('webauthn_credentials');
+
+        if (!in_array('policy', $columns, true)) {
+            $this->pdo->exec("ALTER TABLE webauthn_credentials ADD COLUMN policy TEXT NOT NULL DEFAULT 'required'");
+        }
+
+        if (!in_array('uv_seen', $columns, true)) {
+            $this->pdo->exec('ALTER TABLE webauthn_credentials ADD COLUMN uv_seen INTEGER NOT NULL DEFAULT 0');
+        }
+    }
+
+    /**
+     * Noms des colonnes d'une table. Le nom de la table vient du schema, jamais d'une
+     * requete : PRAGMA ne prend pas de parametre prepare.
+     *
+     * @return list<string>
+     */
+    private function columns(string $table): array
+    {
+        return array_column($this->all('PRAGMA table_info(' . $table . ')'), 'name');
     }
 
     /** @return list<string> */
@@ -111,15 +136,17 @@ final class Db
                 used_at TEXT
             )',
 
-            'CREATE TABLE IF NOT EXISTS webauthn_credentials (
+            "CREATE TABLE IF NOT EXISTS webauthn_credentials (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 credential_id TEXT NOT NULL,
                 cose TEXT NOT NULL,
                 sign_count INTEGER NOT NULL DEFAULT 0,
                 aaguid TEXT,
+                policy TEXT NOT NULL DEFAULT 'required',
+                uv_seen INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
-            )',
+            )",
 
             'CREATE TABLE IF NOT EXISTS pages (
                 id INTEGER PRIMARY KEY,
