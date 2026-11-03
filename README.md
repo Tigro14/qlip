@@ -284,7 +284,11 @@ origine qui ne correspond pas au `rpId`. Les causes, dans l'ordre ou on les ecar
    Avec une YubiKey 5 en FIDO2, saisis le PIN (defaut `1234` sur une clef neuve).
 3. Transports : aucune liste n'est envoyee, le navigateur choisit. Une clef vue comme carte a
    puce (`smart-card`) ou par NFC serait ecartee par une liste fermee.
-4. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
+4. `NotSupportedError` avec `CredentialsContainer request is not supported` : la requete ne nomme
+   pas le type de credential. Le membre `publicKey` est obligatoire sur `create()` comme sur
+   `get()` ; la forme plate heritee de WebAuthn Level 1 (options au premier niveau) est refusee par
+   Firefox, qui rejette la requete avant de parler a l'authenticateur.
+5. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
    `NotSupportedError`) : un echec immediat, avant tout prompt, vient des options ou de
    l'origine ; un echec apres le prompt vient d'une annulation ou du delai depasse.
 

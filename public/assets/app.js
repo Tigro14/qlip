@@ -156,12 +156,18 @@ async function assertCredential(element) {
     // et l assertion echoue si on lui passe une liste vide.
     const allow = (ceremony.allowCredentials || []).map((entry) => ({ id: fromBase64Url(entry.id), type: 'public-key' }));
 
+    // Le container nomme le type de credential par un membre : ici c'est publicKey, comme pour
+    // create(). La forme plate hereditee de WebAuthn Level 1 (les options au premier niveau) ne
+    // nomme aucun type, et le container la rejette avec NotSupportedError avant meme de parler a
+    // l authenticateur.
     const assertion = await navigator.credentials.get({
-        rpId: ceremony.rpId,
-        challenge: fromBase64Url(ceremony.challenge),
-        timeout: 60000,
-        userVerification: ceremony.policy || 'required',
-        allowCredentials: allow,
+        publicKey: {
+            challenge: fromBase64Url(ceremony.challenge),
+            rpId: ceremony.rpId,
+            timeout: 60000,
+            userVerification: ceremony.policy || 'required',
+            allowCredentials: allow,
+        },
     });
 
     if (!assertion || !assertion.response) {

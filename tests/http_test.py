@@ -413,6 +413,12 @@ def run():
     check("app.js : politique lue des options du serveur", "ceremony.policy" in script, "le client ne choisit pas sa politique de verification")
     check("app.js : cible d assertion prise de la page", "element.dataset.assert" in script, "la ceremonie du second facteur ne va pas a celle d administration")
     check(
+        "app.js : les deux ceremonies nomment le type par le membre publicKey",
+        re.search(r"credentials\.create\(\{\s*publicKey", script) is not None
+        and re.search(r"credentials\.get\(\{\s*publicKey", script) is not None,
+        "une requete sans membre de type est refusee par le container (NotSupportedError)",
+    )
+    check(
         "app.js : aucune fonction appelee sans etre definie",
         called <= defined | known,
         ", ".join(sorted(called - defined - known)) or "%d appels" % len(called),
