@@ -425,11 +425,8 @@ def run():
     # Le script n est pas execute par la suite : il est relu pour ce qui ne peut pas etre
     # verifie ici, un nom de methode de l API WebAuthn et les appels de fonctions du fichier.
     script = open(os.path.join(ROOT, "public", "assets", "app.js"), encoding="utf-8").read()
-    source = re.sub(r"/\*.*?\*/", " ", re.sub(r"//[^\n]*", "", script), flags=re.S)
-    defined = set(re.findall(r"function\s+([A-Za-z0-9_$]+)\s*\(", source)) | set(re.findall(r"const\s+([A-Za-z0-9_$]+)\s*=", source))
     known = {"Error", "JSON", "Uint8Array", "atob", "btoa", "fetch"}
     keywords = {"if", "for", "while", "switch", "return", "catch", "typeof", "new", "throw", "function", "of", "in"}
-    called = set(re.findall(r"(?<![\w.$\])}])([A-Za-z0-9_$]+)\s*\(", source)) - keywords
 
     check("app.js : objet d attestation lu par la propriete attestationObject", "attestationObject" in script, "la forme de la spec courante, pas un nom invente")
     check("app.js : l ancienne forme getAttestation() reste acceptee", "typeof response.getAttestation" in script, "elle n existe pas dans tous les navigateurs : un seul nom donne un TypeError")
@@ -442,11 +439,32 @@ def run():
         and re.search(r"credentials\.get\(\{\s*publicKey", script) is not None,
         "une requete sans membre de type est refusee par le container (NotSupportedError)",
     )
+    # Tous les scripts du dossier sont relus, pas seulement app.js : le script du theme appelle
+    # ses fonctions sans etre execute par la suite.
+    for name in sorted(n for n in os.listdir(os.path.join(ROOT, "public", "assets")) if n.endswith(".js")):
+        text = open(os.path.join(ROOT, "public", "assets", name), encoding="utf-8").read()
+        flat = re.sub(r"/\*.*?\*/", " ", re.sub(r"//[^\n]*", "", text), flags=re.S)
+        funcs = set(re.findall(r"function\s+([A-Za-z0-9_$]+)\s*\(", flat)) | set(re.findall(r"const\s+([A-Za-z0-9_$]+)\s*=", flat))
+        hit = set(re.findall(r"(?<![\w.$\])}])([A-Za-z0-9_$]+)\s*\(", flat)) - keywords
+
+        check(
+            "script %s : aucune fonction appelee sans etre definie" % name,
+            hit <= funcs | known,
+            ", ".join(sorted(hit - funcs - known)) or "%d appels" % len(hit),
+        )
+
+    # Le theme est pose par l attribut data-theme, jamais par une regle dans la page : la CSP
+    # (style-src 'self') autorise la feuille, pas une declaration inline. Et le script doit etre
+    # execute avant le contenu, sinon la page s affiche en clair puis bascule.
+    _, _, home = get("/")
+
+    check("page charge theme.js", b"assets/theme.js" in home, "script externe, jamais inline")
     check(
-        "app.js : aucune fonction appelee sans etre definie",
-        called <= defined | known,
-        ", ".join(sorted(called - defined - known)) or "%d appels" % len(called),
+        "theme.js charge sans defer, dans le head",
+        re.search(rb'<head>.*?<script src="[^"]*assets/theme\.js"></script>', home, flags=re.S) is not None,
+        "un script defer s execute apres le parse : la page bascule apres le premier paint",
     )
+    check("switch de theme dans le nav", b'data-theme-toggle' in home, "le bouton est le dernier element du nav")
 
     csrf = csrf_of(body)
 

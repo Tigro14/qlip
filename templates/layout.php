@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= e($title ?? 'Qlip') ?> &middot; Qlip</title>
     <link rel="stylesheet" href="<?= attr(url('assets/app.css')) ?>">
+
+    <!-- Le script du theme est charge ici, sans defer : il doit poser l attribut avant le
+         premier paint. Un script defer s execute apres le parse, la page s afficherait en
+         clair puis basculerait. La feuille ne peut pas le faire seule, elle ne connait pas le
+         choix stocke, et la CSP interdit une regle dans la page. -->
+    <script src="<?= attr(url('assets/theme.js')) ?>"></script>
 </head>
 <body>
 <header class="bar">
@@ -23,6 +29,10 @@
             <a href="<?= attr(url('login')) ?>">Connexion</a>
             <a href="<?= attr(url('register')) ?>">Inscription</a>
         <?php endif; ?>
+
+        <!-- Le switch est le dernier element du nav, donc il est a droite. Il n envoie rien
+             au serveur : il pose l attribut data-theme et le choix dans localStorage. -->
+        <button type="button" class="secondary" data-theme-toggle aria-pressed="false">Theme</button>
     </nav>
 </header>
 

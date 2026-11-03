@@ -44,8 +44,17 @@
     --pad: 1rem;
 }
 
+/* Le theme est choisi dans cet ordre : l attribut pose par theme.js, sinon la preference
+   du systeme. Sans JavaScript le site reste utilisable, il suit le systeme.
+
+   Le bloc sombre est ecrit deux fois parce que la CSS ne sait pas nommer un jeu de valeurs :
+   le media query s applique quand aucun choix n est stocke, l attribut quand le switch a choisi.
+   Les deux listes doivent rester identiques, sinon le switch et le systeme donnent deux
+   palettes differentes. */
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme='light']) {
+        color-scheme: dark;
+
         --bg: #16181a;
         --surface: #1f2225;
         --ink: #e6e6e2;
@@ -58,6 +67,26 @@
 
         --watermark: 0.10;
     }
+}
+
+html[data-theme='dark'] {
+    color-scheme: dark;
+
+    --bg: #16181a;
+    --surface: #1f2225;
+    --ink: #e6e6e2;
+    --muted: #a2a4a8;
+    --line: #34383b;
+    --accent: #6cc08c;
+    --error: #e08a90;
+    --ok-bg: #1c2822;
+    --err-bg: #2b1d1f;
+
+    --watermark: 0.10;
+}
+
+html[data-theme='light'] {
+    color-scheme: light;
 }
 
 * {
