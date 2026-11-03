@@ -375,6 +375,27 @@ session que cette cle avait apportee (`webauthn_at`) : la page d administration 
 assertion. Supprimer une autre cle du meme compte ne change pas la confirmation, la session
 garde la credential qui l a faite.
 
+### Journal : pagination et effacement de plus de 2 mois
+
+La page d administration lit ses listes par page de 50. Le nombre de pages vient d un COUNT,
+pas des lignes lues : sinon la derniere page, quand elle n est pas pleine, ne serait jamais
+proposee. Le numero est un element de l URL, un par liste, donc une liste ne deplace pas les
+autres ; un numero demande hors plage est ramene a ce que la liste peut donner, parce qu un
+offset negatif n est pas une page.
+
+L effacement des lignes plus vieilles de 2 mois (`Journal::RETENTION_MONTHS`) est une
+suppression definitive, dans le meme style que les autres : POST seulement, jeton CSRF,
+confirmation explicite, mot de passe du compte, et une session confirmee par une assertion comme
+le reste de la page. Elle n est pas automatique : rien ne part sans qu on le demande, et ce qui
+est efface ne revient pas.
+
+Deux choses que l effacement ne doit pas casser :
+
+- la trace est ecrite apres le DELETE, avec le nombre de lignes parties (`journal_efface`) : la
+  ligne qui consigne l effacement ne peut pas s effacer elle-meme ;
+- le quota porte sur les evenements de creation du jour, pas sur les lignes qui restent : effacer
+  un journal de 2 mois ne rembourse rien.
+
 ### Effacer la cle quand la ceremony ne marche plus
 
 Une cle enregistree ferme le compte au mot de passe seul : `POST /login` met la session en
@@ -465,7 +486,8 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    reinitialisation de mot de passe : lien usage unique, 24 h, adresse sans compte, verou de
    5 demandes, jetons du compte fermes, pages, quotas par compte, exports etancheite, CSRF,
    ceremony WebAuthn par la route, transports smtp et local : lien masque et echec d envoi
-   signale, suppressions avec confirmation, cascade, quota non rembourse, trace d audit) ;
+   signale, suppressions avec confirmation, cascade, quota non rembourse, trace d audit, journal :
+   numero de page ramene, et effacement seulement de ce qui a plus de 2 mois avec sa trace) ;
 7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
    serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
    `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
@@ -519,11 +541,11 @@ reinscrire.
 public/          front controller + serveur de developpement + assets
 src/App/         Config, Router, Request, Response, Session, View, conteneur
 src/Controllers/ Auth, Pages, Badges, Admin
-src/Services/    Users, Badges, Credentials, Mailer
+src/Services/    Users, Badges, Credentials, Journal, Mailer
 src/Qr/          encodeur QR (Reed-Solomon, masks, penalites) + rendus SVG/PNG/ASCII
 src/Stl/         Mesh, Triangulator, Design, Badge, StlWriter, ThreeMfWriter
 src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Policy, Verifier
-src/Support/     helpers (base64url, echappement, jetons)
+src/Support/     helpers (base64url, echappement, jetons), Pager, ZipWriter, SMTP, Sendmail
 templates/       vues HTML
 tests/           suite de tests (PHP + Python)
 ```

@@ -45,6 +45,14 @@
 
     <h2>Comptes</h2>
 
+    <p class="note">
+        <?= (int) $usersPager->count() ?> lignes, page <?= (int) $usersPager->page() ?> sur <?= (int) $usersPager->pages() ?>.
+    </p>
+
+    <?php if ($usersPager->pages() > 1): ?>
+        <?= pager('admin', $usersPager) ?>
+    <?php endif; ?>
+
     <table>
         <thead>
             <tr><th>#</th><th>Email</th><th>Admin</th><th>Verifie</th><th>Pages</th><th>Badges</th><th>Creé</th></tr>
@@ -65,6 +73,14 @@
     </table>
 
     <h2>Pages de contact</h2>
+
+    <p class="note">
+        <?= (int) $pagesPager->count() ?> lignes, page <?= (int) $pagesPager->page() ?> sur <?= (int) $pagesPager->pages() ?>.
+    </p>
+
+    <?php if ($pagesPager->pages() > 1): ?>
+        <?= pager('admin', $pagesPager) ?>
+    <?php endif; ?>
 
     <table>
         <thead>
@@ -88,7 +104,12 @@
     <p class="note">
         Quota : <?= (int) $dailyLimit ?> creations par jour et par compte.
         Aujourd'hui, total sur la base : <?= (int) $usedToday ?>.
+        <?= (int) $badgesPager->count() ?> lignes, page <?= (int) $badgesPager->page() ?> sur <?= (int) $badgesPager->pages() ?>.
     </p>
+
+    <?php if ($badgesPager->pages() > 1): ?>
+        <?= pager('admin', $badgesPager) ?>
+    <?php endif; ?>
 
     <table>
         <thead>
@@ -114,6 +135,14 @@
 
     <h2>Journal</h2>
 
+    <p class="note">
+        <?= (int) $journalPager->count() ?> lignes, page <?= (int) $journalPager->page() ?> sur <?= (int) $journalPager->pages() ?>.
+    </p>
+
+    <?php if ($journalPager->pages() > 1): ?>
+        <?= pager('admin', $journalPager) ?>
+    <?php endif; ?>
+
     <table>
         <thead>
             <tr><th>#</th><th>Compte</th><th>Action</th><th>Detail</th><th>Date</th></tr>
@@ -130,4 +159,28 @@
             <?php endforeach; ?>
         </tbody>
     </table>
+
+    <h2>Effacer le journal</h2>
+
+    <p class="note">
+        Suppression definitive : ce qui est plus vieux de <?= (int) $retention ?> mois part, donc la
+        page demande le mot de passe du compte et une confirmation explicite, comme les autres
+        suppressions. Le quota du jour ne vient pas de ces lignes : il porte sur les creations du
+        jour, donc effacer ce qui a plus de <?= (int) $retention ?> mois ne change pas le comptage.
+        La ligne qui consigne l effacement est ecrite apres le DELETE : elle ne peut pas s effacer
+        elle-meme, et elle dit combien de lignes sont parties.
+    </p>
+
+    <form method="post" action="<?= attr(url('admin/journal/purge')) ?>">
+        <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+        <p class="note">
+            Lignes concernees : <?= (int) $oldLines ?> (date avant le <?= e($cutoff ?? '') ?>).
+        </p>
+
+        <label>Mot de passe<input type="password" name="password" required></label>
+        <label><input type="checkbox" name="confirm" value="1" required> Confirmer l effacement</label>
+
+        <button type="submit">Effacer les lignes de plus de <?= (int) $retention ?> mois</button>
+    </form>
 </section>

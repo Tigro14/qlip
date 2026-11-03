@@ -7,6 +7,7 @@ namespace Qlip\App;
 use Qlip\Db;
 use Qlip\Services\Badges;
 use Qlip\Services\Credentials;
+use Qlip\Services\Journal;
 use Qlip\Services\Mailer;
 use Qlip\Services\Users;
 use Qlip\Webauthn\Policy;
@@ -24,6 +25,7 @@ final class App
     public Users $users;
     public Badges $badges;
     public Credentials $credentials;
+    public Journal $journal;
 
     public function __construct(?Config $config = null)
     {
@@ -36,6 +38,7 @@ final class App
         $this->users = new Users($this->db, $this->mailer, $this->config->baseUrl);
         $this->badges = new Badges($this->db, $this->config->dailyLimit, $this->config->baseUrl);
         $this->credentials = new Credentials($this->db, $this->config->rpId, $this->config->origins, $this->config->rootsPem());
+        $this->journal = new Journal($this->db);
     }
 
     /** URL absolue depuis la base de configuration. */

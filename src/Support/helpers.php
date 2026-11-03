@@ -100,3 +100,21 @@ function attr(string $value): string
 {
     return e($value);
 }
+
+/**
+ * Liens de pagination. Le numero est un element de l URL, donc chaque liste d une meme page
+ * a son propre numero et ne deplace pas les autres. Le nom du parametre vient du code, pas
+ * d une requete, et il est echappe comme le reste du rendu.
+ */
+function pager(string $path, \Qlip\Support\Pager $list): string
+{
+    $links = [];
+
+    for ($page = 1; $page <= $list->pages(); $page++) {
+        $links[] = $page === $list->page()
+            ? '<span class="current">' . $page . '</span>'
+            : '<a href="' . attr(url($path) . '?' . $list->param() . '=' . $page) . '">' . $page . '</a>';
+    }
+
+    return '<p class="pager">' . implode(' ', $links) . '</p>';
+}

@@ -13,6 +13,7 @@ use Qlip\App\Session;
 use Qlip\Stl\Design;
 use Qlip\Stl\StlWriter;
 use Qlip\Stl\ThreeMfWriter;
+use Qlip\Support\Pager;
 use Qlip\Webauthn\Policy;
 
 /**
@@ -1061,6 +1062,120 @@ if ($u2f === null) {
     check('connexion au seul mot de passe apres la suppression', $response->status() === 302 && !(str_contains((string) $response->header('Location'), '2fa')), (string) $response->header('Location'));
     check('aucune action de suppression dans le comptage des badges', $app->badges->usedToday((int) $twoUser['id']) === 0);
 }
+
+// 19. Journal : pagination et effacement de ce qui a plus de 2 mois.
+//
+// Le nombre de pages vient d un COUNT, pas des lignes lues : sinon la derniere page, quand
+// elle n est pas pleine, ne serait jamais proposee. Le numero demande est borne : un numero
+// hors plage ne part pas dans la requete, parce qu un offset negatif est une reponse.
+$pager = new Pager('journal_page', 110, 3);
+
+check('pagination : le nombre de pages vient du COUNT', $pager->pages() === 3, (string) $pager->pages());
+check('pagination : offset de la troisieme page', $pager->offset() === 100, (string) $pager->offset());
+check('pagination : numero hors plage ramene a la derniere page', (new Pager('journal_page', 110, 99))->page() === 3);
+check('pagination : numero invalide ramene a la premiere page', (new Pager('journal_page', 110, -2))->page() === 1);
+check('pagination : une liste vide tient sur une page', (new Pager('journal_page', 0, 4))->page() === 1 && (new Pager('journal_page', 0, 4))->pages() === 1);
+
+// On ecrit 100 lignes avec des marqueurs : les checks ne dependent pas des lignes deja
+// presentes, seulement des marqueurs. La premiere page donne les 50 plus recentes.
+foreach (range(1, 100) as $index) {
+    $app->journal->audit((int) $admin['id'], 'test_journal', 'ligne test ' . $index);
+}
+
+$total = $app->db->count('SELECT COUNT(*) FROM audit_log');
+$pages = (int) ceil($total / Pager::PER_PAGE);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id'], 'webauthn_at' => now()], true);
+
+$journalPage = static function (int $number) use ($app, $router): Response {
+    $request = new Request('GET', '/admin', ['journal_page' => $number]);
+
+    return $router->dispatch($request);
+};
+
+$body = $journalPage(2)->body();
+
+check('journal : la page donne son numero', str_contains($body, 'lignes, page 2 sur ' . $pages), 'page 2 sur ' . $pages);
+check('journal : la page 2 donne les lignes de la page 2', str_contains($body, 'ligne test 50') && !str_contains($body, 'ligne test 51'));
+check('journal : lien vers la page suivante', str_contains($body, 'journal_page=3') || $pages === 2, (string) $pages);
+
+$body = $journalPage(999)->body();
+
+check('journal : numero hors plage ramene a la derniere page', str_contains($body, '<span class="current">' . $pages . '</span>'), 'page ' . $pages);
+check('journal : une page hors plage ne rend pas les lignes de la premiere', !str_contains($body, 'ligne test 100'));
+
+// Effacement : POST seulement, jeton CSRF, confirmation explicite, mot de passe du compte, et
+// la session confirmee par une assertion comme le reste de la page d administration.
+$purge = static function (array $body) use ($send): Response {
+    return $send('POST', '/admin/journal/purge', $body);
+};
+
+check('GET sur la route effacer le journal', $router->dispatch(new Request('GET', '/admin/journal/purge'))->status() === 405);
+check('effacement refuse sans jeton', $purge(['csrf' => 'mauvais-jeton', 'confirm' => '1', 'password' => 'mot-de-passe-long'])->status() === 400);
+check('effacement refuse sans confirmation', $purge(['confirm' => '0', 'password' => 'mot-de-passe-long'])->status() === 400);
+check('effacement refuse sans mot de passe', $purge(['confirm' => '1'])->status() === 401);
+check('effacement refuse avec un mauvais mot de passe', $purge(['confirm' => '1', 'password' => 'pas-le-bon-mot-de-passe'])->status() === 401);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $otherUser['id'], 'webauthn_at' => now()], true);
+
+check('effacement reserve a l administration', $purge(['confirm' => '1', 'password' => 'un-mot-de-passe-long'])->status() === 403);
+
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id']], true);
+
+$response = $purge(['confirm' => '1', 'password' => 'mot-de-passe-long']);
+
+check('effacement refuse quand la session n est pas confirmee par une assertion',
+    str_contains((string) $response->header('Location'), '/admin/yubikey'),
+    (string) $response->header('Location'));
+
+// Ce qui est efface est seulement ce qui est plus vieux que la retention : une ligne de 65 jours
+// part, une ligne de 40 jours reste. Le nom de l action est distinct, et la trace est ecrite
+// apres le DELETE : la ligne qui consigne l effacement ne peut pas s effacer elle-meme.
+$app->session = new Session(['token' => random_token(16), 'user_id' => (int) $admin['id'], 'webauthn_at' => now()], true);
+
+$insert = static function (int $days, string $detail) use ($app, $admin): void {
+    $app->db->exec(
+        "INSERT INTO audit_log (user_id, action, detail, created_at) VALUES (:user_id, 'test_journal', :detail, :created_at)",
+        [
+            ':user_id' => (int) $admin['id'],
+            ':detail' => $detail,
+            ':created_at' => date('Y-m-d H:i:s', time() - $days * 86400),
+        ]
+    );
+};
+
+$insert(65, 'ligne de 65 jours');
+$insert(40, 'ligne de 40 jours');
+
+$quota = $app->badges->usedToday((int) $admin['id']);
+
+$response = $purge(['confirm' => '1', 'password' => 'mot-de-passe-long']);
+$data = json_decode($response->body(), true) ?: [];
+
+check('effacement accepte pour le compte administrateur', $response->status() === 200, $response->body());
+check('effacement : seulement ce qui a plus de 2 mois', ($data['rows'] ?? -1) === 1, json_encode($data));
+check('ligne de 65 jours effacee', $app->db->count("SELECT COUNT(*) FROM audit_log WHERE detail = 'ligne de 65 jours'") === 0);
+check('ligne de 40 jours garde e', $app->db->count("SELECT COUNT(*) FROM audit_log WHERE detail = 'ligne de 40 jours'") === 1);
+$kept = $app->db->count('SELECT COUNT(*) FROM audit_log');
+$keptPages = (int) ceil($kept / Pager::PER_PAGE);
+
+check('le numero de page est ramene a ce qui reste', str_contains($journalPage(999)->body(), 'page ' . $keptPages . ' sur ' . $keptPages), (string) $keptPages);
+
+// Le quota porte sur les creations du jour, pas sur les lignes qui restent : effacer un journal
+// de 2 mois ne doit pas rembourser le quota.
+check('effacement ne rembourse pas le quota', $app->badges->usedToday((int) $admin['id']) === $quota, (string) $quota);
+
+$trace = $app->db->one("SELECT user_id, action, detail, created_at FROM audit_log WHERE action = 'journal_efface' ORDER BY id DESC LIMIT 1");
+
+check(
+    'trace de l effacement du journal',
+    $trace !== null
+        && (int) $trace['user_id'] === (int) $admin['id']
+        && str_contains((string) $trace['detail'], 'effacement du journal')
+        && str_ends_with((string) $trace['detail'], ': 1'),
+    json_encode($trace)
+);
+check('la trace de l effacement n est pas effacee par l effacement', $trace !== null && strtotime((string) $trace['created_at']) > time() - 120, (string) ($trace['created_at'] ?? ''));
 
 echo PHP_EOL, 'problemes : ', $failures, PHP_EOL;
 exit($failures === 0 ? 0 : 1);

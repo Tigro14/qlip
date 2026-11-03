@@ -30,11 +30,11 @@ avec email verifie, reinitialisation de mot de passe par lien envoye par email (
 public/          front controller + serveur de developpement + assets
 src/App/         Config, Router, Request, Response, Session, View, conteneur
 src/Controllers/ Auth, Pages, Badges, Admin
-src/Services/    Users, Badges, Credentials, Mailer
+src/Services/    Users, Badges, Credentials, Journal, Mailer
 src/Qr/          encodeur QR (Reed-Solomon, masks, penalites) + rendus SVG/PNG/ASCII
 src/Stl/         Mesh, Triangulator, Design, Badge, StlWriter, ThreeMfWriter
 src/Webauthn/    Cbor, AuthenticatorData, CoseKey, Signature, Policy, Verifier
-src/Support/     helpers (base64url, echappement, jetons) + ZipWriter + client SMTP (TLS)
+src/Support/     helpers (base64url, echappement, jetons, pager) + Pager + ZipWriter + client SMTP (TLS)
                  + remise au MTA local (arguments en liste, jamais une chaine de commande)
 templates/       vues HTML
 tests/           suite de tests (PHP + Python) + Containerfile
@@ -71,6 +71,10 @@ fichier, dans le namespace `Qlip\...`.
 - suppression definitive : POST seulement, jeton CSRF, confirmation explicite, mot de passe
   pour le compte, et controle d appartenance (proprietaire ou administrateur). Une ligne
   d audit est ecrite pour chaque suppression ;
+ - l effacement du journal (plus de 2 mois, `Journal::RETENTION_MONTHS`) est une suppression
+   definitive dans le meme style : POST seulement, jeton CSRF, confirmation, mot de passe du
+   compte, session confirmee par une assertion, et trace ecrite apres le DELETE parce que la ligne
+   qui consigne l effacement ne peut pas s effacer elle-meme ;
 - supprimer la cle 2FA est une suppression definitive : le mot de passe est demande, parce que
   sans lui une session laissee ouverte permettrait d enlever le second facteur et de rendre le
   compte accessible par le seul mot de passe. La session garde la credential qui l a confirmee

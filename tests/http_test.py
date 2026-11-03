@@ -741,7 +741,67 @@ def run():
 
     check("administration ouverte par mot de passe + possession", status == 200, str(status))
 
-    # 10c. Oublier la cle 2FA. POST seulement, jeton CSRF, confirmation explicite, mot de passe
+    # 10c. Journal de la page d administration : paginé par page de 50. Le nombre de pages vient
+    # du COUNT, pas des lignes lues, et un numero demande hors plage est ramene : sinon la
+    # requete partirait avec un offset negatif, ce qui n est pas une page.
+    status, _, body = get("/admin?journal_page=99", admin)
+
+    current = re.search(rb'<span class="current">(\d+)</span>', body)
+    links = [int(number) for number in re.findall(rb"journal_page=(\d+)", body)]
+
+    check("journal : la page affiche son numero", re.search(rb"lignes, page \d+ sur \d+", body) is not None, str(status))
+
+    # Les liens sont les autres pages : si le numero demande est ramene a la derniere, il ne reste
+    # que les pages qui la precedent. Une page vide ne serait pas une reponse.
+    check("journal : numero demande hors plage ramene a la derniere page",
+          current is not None and int(current.group(1)) == len(links) + 1,
+          current.group(1).decode() if current else "aucun numero")
+    check("journal : pas de lien vers une page qui n existe pas", not links or max(links) < (int(current.group(1)) if current else 1), str(links))
+
+    # Effacement : POST seulement, jeton CSRF, confirmation explicite, mot de passe du compte, et
+    # la session confirmee par une assertion comme le reste de la page. Rien ne part ici : le
+    # journal du conteneur n a rien de plus vieux que 2 mois, et c est ce que le controle de date
+    # doit montrer.
+    status, _, body = get("/admin", admin)
+    admin_csrf = csrf_of(body)
+
+    check("journal : rien de plus vieux que la retention", b"Lignes concernees : 0" in body)
+
+    status, _, _ = raw(admin, "GET", "/admin/journal/purge")
+
+    check("GET sur la route effacer le journal", status == 405, str(status))
+
+    status, data = post_json("/admin/journal/purge", {"csrf": "mauvais-jeton", "confirm": "1", "password": "un-mot-de-passe-long"}, admin)
+
+    check("effacement refuse sans jeton", status == 400, data.get("error", ""))
+
+    status, data = post_json("/admin/journal/purge", {"csrf": admin_csrf, "confirm": "0", "password": "un-mot-de-passe-long"}, admin)
+
+    check("effacement refuse sans confirmation", status == 400, data.get("error", ""))
+
+    status, data = post_json("/admin/journal/purge", {"csrf": admin_csrf, "confirm": "1"}, admin)
+
+    check("effacement refuse sans mot de passe", status == 401, data.get("error", ""))
+
+    status, data = post_json("/admin/journal/purge", {"csrf": admin_csrf, "confirm": "1", "password": "pas-le-bon-mot-de-passe"}, admin)
+
+    check("effacement refuse avec un mauvais mot de passe", status == 401, data.get("error", ""))
+
+    # Un compte dont la session est confirmee par une assertion n est pas administrateur : il ne
+    # peut pas effacer le journal, meme avec son mot de passe.
+    two_csrf = csrf_of(get("/dashboard", two)[2])
+
+    status, data = post_json("/admin/journal/purge", {"csrf": two_csrf, "confirm": "1", "password": "un-mot-de-passe-long"}, two)
+
+    check("effacement reserve a l administration", status == 403, data.get("error", ""))
+
+    status, data = post_json("/admin/journal/purge", {"csrf": admin_csrf, "confirm": "1", "password": "un-mot-de-passe-long"}, admin)
+
+    check("effacement accepte pour le compte administrateur", status == 200 and data.get("deleted") is True, json.dumps(data))
+    check("effacement : la retention ne touche pas les lignes du jour", data.get("rows") == 0, str(data.get("rows")))
+    check("trace de l effacement dans le journal", b"effacement du journal" in get("/admin", admin)[2])
+
+    # 10d. Oublier la cle 2FA. POST seulement, jeton CSRF, confirmation explicite, mot de passe
     # du compte, et controle d appartenance. Supprimer la cle qui confirmait la session la rend
     # de nouveau non confirmee : la page d administration redemande une assertion.
     status, _, _ = raw(session, "GET", "/credentials/%s/delete" % two_credential)

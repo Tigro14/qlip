@@ -7,6 +7,8 @@ namespace Qlip\Controllers;
 use Qlip\App\App;
 use Qlip\App\Request;
 use Qlip\App\Response;
+use Qlip\Services\Journal;
+use Qlip\Support\Pager;
 use Qlip\Webauthn\Policy;
 
 /**
@@ -51,6 +53,17 @@ final class AdminController
             return $credential + ['type' => $key['type'] ?? '-', 'alg' => $key['alg'] ?? '-'];
         }, $this->app->credentials->list((int) $user['id']));
 
+        // Listes paginatees : ce qui depasse la limite ne doit pas disparaitre en silence. Le
+        // nombre de pages vient du COUNT, pas des lignes lues, sinon la derniere page ne serait
+        // jamais proposee quand elle est pleine. Chaque liste a son propre numero, donc une
+        // liste ne deplace pas les autres sur la meme page.
+        $usersPager = new Pager('users_page', $this->app->db->count('SELECT COUNT(*) FROM users'), (int) $request->input('users_page'));
+        $pagesPager = new Pager('pages_page', $this->app->db->count('SELECT COUNT(*) FROM pages'), (int) $request->input('pages_page'));
+        $badgesPager = new Pager('badges_page', $this->app->db->count('SELECT COUNT(*) FROM badges'), (int) $request->input('badges_page'));
+        $journalPager = new Pager('journal_page', $this->app->journal->count(), (int) $request->input('journal_page'));
+
+        $cutoff = $this->app->journal->cutoff();
+
         return Response::html($this->app->view->render('admin.php', [
             'title' => 'Administration',
             'user' => $user,
@@ -59,19 +72,29 @@ final class AdminController
                 'SELECT u.*,
                     (SELECT COUNT(*) FROM pages p WHERE p.user_id = u.id) AS pages,
                     (SELECT COUNT(*) FROM badges b WHERE b.user_id = u.id) AS badges
-                 FROM users u ORDER BY u.id'
+                 FROM users u ORDER BY u.id LIMIT :limit OFFSET :offset',
+                [':limit' => Pager::PER_PAGE, ':offset' => $usersPager->offset()]
             ),
+            'usersPager' => $usersPager,
             'pages' => $this->app->db->all(
-                'SELECT p.*, u.email AS user_email FROM pages p JOIN users u ON u.id = p.user_id ORDER BY p.id DESC LIMIT 100'
+                'SELECT p.*, u.email AS user_email
+                 FROM pages p JOIN users u ON u.id = p.user_id
+                 ORDER BY p.id DESC LIMIT :limit OFFSET :offset',
+                [':limit' => Pager::PER_PAGE, ':offset' => $pagesPager->offset()]
             ),
+            'pagesPager' => $pagesPager,
             'badges' => $this->app->db->all(
                 'SELECT b.*, p.slug, u.email AS user_email
                  FROM badges b JOIN pages p ON p.id = b.page_id JOIN users u ON u.id = b.user_id
-                 ORDER BY b.id DESC LIMIT 100'
+                 ORDER BY b.id DESC LIMIT :limit OFFSET :offset',
+                [':limit' => Pager::PER_PAGE, ':offset' => $badgesPager->offset()]
             ),
-            'audit' => $this->app->db->all(
-                'SELECT a.*, u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 100'
-            ),
+            'badgesPager' => $badgesPager,
+            'audit' => $this->app->journal->page($journalPager),
+            'journalPager' => $journalPager,
+            'retention' => Journal::RETENTION_MONTHS,
+            'cutoff' => $cutoff,
+            'oldLines' => $this->app->journal->oldCount($cutoff),
             'dailyLimit' => $this->app->config->dailyLimit,
             'usedToday' => $this->app->db->count(
                 'SELECT COUNT(*) FROM badges WHERE substr(created_at, 1, 10) = :day',
@@ -83,6 +106,68 @@ final class AdminController
             'rpId' => $this->app->config->rpId,
             'flash' => $this->app->takeFlash(),
         ]));
+    }
+
+    /**
+     * Effacement du journal plus vieux que la retention. Suppression definitive, dans le meme
+     * style que les autres : POST seulement, jeton CSRF, confirmation explicite et mot de passe
+     * du compte, parce que rien ne revient et qu une session laissee ouverte ne doit pas
+     * permettre de detruire la trace. Le controle d appartenance est le compte administrateur,
+     * et la session doit etre confirmee par une assertion comme le reste de la page.
+     *
+     * La trace est ecrite par le service, apres le DELETE : la ligne qui consigne l effacement
+     * ne peut pas etre effacee par l effacement.
+     */
+    public function purgeJournal(Request $request): Response
+    {
+        $user = $this->app->currentUser();
+
+        if ($user === null) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Connexion requise.'], 401)
+                : Response::html('Connexion requise.', 401);
+        }
+
+        if ((int) $user['is_admin'] !== 1) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Acces reserve a l administration.'], 403)
+                : Response::html('Acces reserve a l administration.', 403);
+        }
+
+        if ($this->app->session->get('webauthn_at') === null) {
+            return Response::redirect($this->app->url('admin/yubikey'));
+        }
+
+        if (!$this->app->session->checkToken($request->input('csrf'))) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Jeton CSRF invalide.'], 400)
+                : Response::html('Jeton CSRF invalide.', 400);
+        }
+
+        if ($request->input('confirm') !== '1') {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Confirmation requise.'], 400)
+                : Response::html('Confirmation requise.', 400);
+        }
+
+        $password = (string) $request->input('password');
+
+        if ($password === '' || !password_verify($password, (string) $user['password_hash'])) {
+            return $request->wantsJson()
+                ? Response::json(['error' => 'Mot de passe incorrect.'], 401)
+                : Response::html('Mot de passe incorrect.', 401);
+        }
+
+        $before = $this->app->journal->cutoff();
+        $deleted = $this->app->journal->purge((int) $user['id'], $before);
+
+        if ($request->wantsJson()) {
+            return Response::json(['deleted' => true, 'rows' => $deleted, 'before' => $before]);
+        }
+
+        $this->app->flash($deleted . ' lignes du journal effacees (avant le ' . $before . ').');
+
+        return Response::redirect($this->app->url('admin'));
     }
 
     public function yubikey(Request $request): Response

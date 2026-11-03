@@ -157,6 +157,26 @@ td {
     vertical-align: top;
 }
 
+.pager {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 0 0 0.75rem;
+}
+
+.pager a {
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+}
+
+.pager .current {
+    font-weight: 700;
+}
+
 .card {
     border: 1px solid var(--line);
     border-radius: 6px;
