@@ -54,6 +54,14 @@ function report(element, message, level) {
     box.className = 'result flash flash-' + (level || 'ok');
 }
 
+// Le nom de la DOMException est utile : NotAllowedError est le message generique de la
+// ceremonie qui ne s est pas terminee (annulation, timeout, authentifiant choisi puis ecarte,
+// origine qui ne correspond pas au RP ID), TypeError veut dire que les options sont mal
+// formees avant meme de parler a l authenticateur.
+function describe(error) {
+    return (error.name || 'erreur') + ' : ' + error.message;
+}
+
 async function registerCredential(element) {
     const { csrf, base } = params(element);
     const ceremony = await getCeremony(element);
@@ -79,7 +87,10 @@ async function registerCredential(element) {
             authenticatorSelection: {
                 residentKey: 'preferred',
                 userVerification: 'required',
-                authenticatorTransport: ['usb', 'hybrid', 'internal'],
+                // Pas de liste de transports : le hint est optionnel, et une YubiKey lue par
+                // le lecteur de cartes (smart-card) ou par NFC serait ecartee par une liste
+                // fermee. Le navigateur choisit le transport, et il doit ignorer les valeurs
+                // qu il ne connait pas.
             },
         },
     });
@@ -145,7 +156,7 @@ function bind(element) {
         registerButton.addEventListener('click', () => {
             registerButton.disabled = true;
             registerCredential(element)
-                .catch((error) => report(element, error.message, 'err'))
+                .catch((error) => report(element, describe(error), 'err'))
                 .finally(() => { registerButton.disabled = false; });
         });
     }
@@ -156,7 +167,7 @@ function bind(element) {
 
             assertCredential(element, [])
                 .then((data) => { if (data.redirect) { window.location.href = data.redirect; } })
-                .catch((error) => report(element, error.message, 'err'))
+                .catch((error) => report(element, describe(error), 'err'))
                 .finally(() => { loginButton.disabled = false; });
         });
     }

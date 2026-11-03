@@ -203,6 +203,24 @@ navigateur qui parle au token, PHP ne fait que verifier la reponse. La ceremony
    `/admin` renvoie a la page d'enrolement. Le compteur de signature doit etre
    strictement croissant, et la meme assertion n'est pas acceptee deux fois.
 
+### Si la ceremonie echoue
+
+Le message par defaut du navigateur (`NotAllowedError`) ne dit pas pourquoi : il couvre
+l'annulation, le delai depasse, un authenticateur ecarte par les criteres de selection, et une
+origine qui ne correspond pas au `rpId`. Les causes, dans l'ordre ou on les ecarte :
+
+1. `rpId` : il doit etre l'hote de l'origine qui appelle `navigator.credentials`. Si
+   `QLIP_BASE_URL` est laisse a son defaut (`http://localhost:8080`) derriere un nom de domaine,
+   le navigateur refuse avant de parler au token. `tests/live.sh` verifie ce point.
+2. `userVerification: 'required'` : la clef doit pouvoir verifier l'utilisateur (PIN). Une clef
+   en mode U2F (CTAP1) ne le peut pas et est ecartee par le critere. Avec une YubiKey 5 en
+   FIDO2, saisis le PIN (defaut `1234` sur une clef neuve).
+3. Transports : aucune liste n'est envoyee, le navigateur choisit. Une clef vue comme carte a
+   puce (`smart-card`) ou par NFC serait ecartee par une liste fermee.
+4. Le nom de l'exception est affiche sur la page (`NotAllowedError`, `TypeError`,
+   `NotSupportedError`) : un echec immediat, avant tout prompt, vient des options ou de
+   l'origine ; un echec apres le prompt vient d'une annulation ou du delai depasse.
+
 En resume : inscription avec l'adresse d'administration, verification d'email, connexion
 par mot de passe, enregistrement de la cle, assertion, `/admin`. Le mot de passe ne sert
 plus ensuite qu'a enregistrer une autre cle (bouton `Enregistrer une YubiKey` sur la page
