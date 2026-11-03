@@ -136,7 +136,10 @@ decodage `zxing-cpp`), `tests/stl_check.py` (maillages et .3MF valides par un le
 tiers). Ne jamais aligner une reference sur l'implementation pour faire passer un test :
 une divergence est un bug a comprendre. Le script du navigateur (`public/assets/app.js`)
 n'est pas execute par la suite : `tests/http_test.py` le relit pour les noms de methodes de
-l'API WebAuthn et les fonctions appelees sans etre definies.
+l'API WebAuthn et les fonctions appelees sans etre definies. `tests/ctap_probe.php` n'est pas
+lancee par `run.sh` non plus : elle parle a une cle reelle (page d'usage F1D0, canal CTAPHID,
+`authenticatorGetInfo`) pour ce que la suite ne peut pas savoir, une cle n'ayant pas de
+verification utilisateur dans le faux authenticateur. Elle n'ecrit rien sur la cle.
 
 `tests/live.sh` est un protocole sur l'instance deployee, lecture seule par defaut : il
 verifie ce que la suite ne peut pas verifier parce que cela depend du serveur web
