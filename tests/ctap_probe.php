@@ -14,9 +14,11 @@ use Qlip\Webauthn\Cbor;
  * un lecteur de cartes), et peut-elle faire la verification utilisateur demandee par
  * l'app (userVerification 'required').
  *
- * La cle doit etre branchee sur la machine qui execute le script, le device est en acces
- * root (crw-------), et la seule commande envoyee est une lecture : rien n'est ecrit sur la
- * cle. Le script n'est pas lance par tests/run.sh, il demande du materiel.
+ * La cle doit etre branchee sur la machine qui execute le script. Le device est en acces root
+ * (crw-------), ou ouvert par une regle udev seulement a des utilisateurs systeme (sssd,
+ * gdm-greeter pour la verification PAM) : un utilisateur normal doit passer par root. La seule
+ * commande envoyee est une lecture, authenticatorGetInfo, rien n'est ecrit sur la cle. Le
+ * script n'est pas lance par tests/run.sh, il demande du materiel.
  *
  *   sudo php tests/ctap_probe.php
  *   sudo php tests/ctap_probe.php /dev/hidraw2
@@ -63,17 +65,19 @@ function check(string $label, bool $ok, string $detail = ''): void
 }
 
 /**
- * Interface HID qui porte la page d'usage FIDO (0xF1D0). Les autres hidraw sont le clavier,
- * la souris ou le lecteur de cartes : une cle vue seulement comme carte (PIV, OpenPGP) n est
- * pas un authenticateur WebAuthn.
+ * Interface HID qui porte la page d'usage FIDO (0xF1D0). Les autres interfaces du meme
+ * device sont le clavier (OTP) ou le lecteur de cartes (PIV, OpenPGP) : une cle vue seulement
+ * comme carte n est pas un authenticateur WebAuthn. La page d'usage se lit dans le descripteur
+ * de rapport, pas dans MODALIAS : MODALIAS porte le type de bus, pas la page d usage.
+ * L item Usage Page 2 octets est 0x06 suivi de la valeur en petit boutien (d0 f1).
  */
 function find_fido_device(): ?string
 {
     foreach (glob('/sys/class/hidraw/hidraw*') ?: [] as $path) {
-        foreach (file($path . '/device/uevent') ?: [] as $line) {
-            if (str_starts_with($line, 'MODALIAS=') && preg_match('/hid:bF1D0/i', $line)) {
-                return basename($path);
-            }
+        $descriptor = file_get_contents($path . '/device/report_descriptor');
+
+        if ($descriptor !== false && str_contains(bin2hex($descriptor), 'd0f1')) {
+            return basename($path);
         }
     }
 
