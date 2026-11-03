@@ -263,7 +263,8 @@ final class Verifier
         }
 
         // Une cle U2F signe en EC2/P-256 : le format fido-u2f n a pas d autre courbe.
-        if ((string) ($data->cose['-3'] ?? '') !== 'P-256') {
+        // La courbe est lue par CoseKey, qui connait les deux numerotations de labels.
+        if (CoseKey::curve($data->cose) !== 'P-256') {
             throw new \InvalidArgumentException('Courbe d attestation U2F autre que P-256.');
         }
 

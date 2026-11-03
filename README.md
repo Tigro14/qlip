@@ -155,7 +155,10 @@ Le navigateur fait la ceremony (`navigator.credentials`), PHP verifie :
 1. `GET /webauthn/challenge` : challenge stocke en session + params pour l'appel.
 2. `POST /webauthn/register` : decode le CBOR de l'attestation, controle les drapeaux
    AT/UP, l'origine, le hash du RP ID, la signature si le format est `packed`
-   (auto-attestation acceptee). La cle COSE est stockee en base.
+   (auto-attestation acceptee). La cle COSE est stockee en base, lue avec les deux
+   numerotations de labels : celle du registre COSE (kty = 1, alg = 3, courbe = -1, x = -2,
+   y = -3) et la numerotation heritee que Chrome emet encore (-1, -2, -3, -4, -5). Une cle
+   qui n'est coherent avec aucune des deux est refusee.
 3. `POST /webauthn/assert` : drapeau UP, origine, hash du RP ID, challenge, compteur
    strictement croissant, signature EC2/P-256 (`ES256`) ou RSA (`RS256`). La conversion
    raw `r||s` en DER est faite a la main.
@@ -360,6 +363,9 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    independante des solides et des .3MF ;
 5. `tests/webauthn_fixture.py` + `tests/webauthn_check.php` : faux authenticateur
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
+   la cle COSE est ecrite avec les deux numerotations de labels (celle du registre et la
+   numerotation heritee), et le PEM construit par PHP est compare au DER produit par la
+   reference Python ; un map melangeant les deux doit etre refuse ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    reinitialisation de mot de passe : lien usage unique, 24 h, adresse sans compte, verou de
    5 demandes, jetons du compte fermes, pages, quotas par compte, exports etancheite, CSRF,

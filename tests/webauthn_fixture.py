@@ -73,24 +73,51 @@ def cbor(value):
     raise TypeError("type CBOR non supporte")
 
 
-def cose_ec(key):
-    numbers = key.private_numbers().public_numbers
+def cose_ec(key, shape="actuelle"):
+    """Cle COSE EC2/P-256, avec les labels du registre COSE (RFC 9052 et RFC 9053).
 
-    return {
-        -1: 2,
-        -2: -7,
-        -3: "P-256",
-        -4: numbers.x.to_bytes(32, "big"),
-        -5: numbers.y.to_bytes(32, "big"),
-    }
+    kty = 1, alg = 3, puis les labels propres au type de cle : courbe = -1, x = -2, y = -3.
+    La valeur de la courbe vient du registre COSE Elliptic Curves : P-256 = 1.
+
+    La numerotation heritee de RFC 8152 est produite aussi, parce que des navigateurs
+    l emettent encore (Chrome) : kty = -1, alg = -2, courbe = -3, x = -4, y = -5, avec la
+    valeur heritee -7 pour P-256. Le harnais ne doit pas ecrire seulement la forme que
+    l implementation lit : sinon l autre forme ne se voit que sur l instance deployee.
+    """
+    numbers = key.private_numbers().public_numbers
+    x = numbers.x.to_bytes(32, "big")
+    y = numbers.y.to_bytes(32, "big")
+
+    if shape == "heritee":
+        return {-1: 2, -2: -7, -3: -7, -4: x, -5: y}
+
+    return {1: 2, 3: -7, -1: 1, -2: x, -3: y}
+
+
+def point(cose):
+    """Point non compresse 0x04 || x || y, la base que l attestation U2F signe.
+
+    Rien pour une cle RSA : le format fido-u2f ne connait pas de cle RSA.
+    """
+    if cose.get(1, cose.get(-1)) != 2:
+        return None
+
+    for labels in ((-2, -3), (5, 6), (-4, -5)):
+        x, y = (cose.get(label) for label in labels)
+
+        if isinstance(x, bytes) and isinstance(y, bytes):
+            return b"\x04" + x + y
+
+    raise ValueError("cle COSE sans coordonnees")
 
 
 def cose_rsa(key):
+    """Cle COSE RSA : kty = 3 (RSA), modulo = -1, exposant = -2."""
     numbers = key.private_numbers().public_numbers
     modulus = numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")
     exponent = numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")
 
-    return {-1: 1, -2: -257, -3: modulus, -4: exponent}
+    return {1: 3, 3: -257, -1: modulus, -2: exponent}
 
 
 def read_der_int(signature, pos):
@@ -145,6 +172,7 @@ def fixture(
     fmt="none",
     att_stmt=None,
     bad_base=None,
+    refused=None,
 ):
     # Enregistrement : AT + UP + UV. Une cle U2F seule ne sait pas faire la verification
     # utilisateur : le drapeau UV est pose seulement quand l'authenticateur peut la faire.
@@ -208,10 +236,21 @@ def fixture(
         sign_count=3,
     )
 
+    key_point = None if refused else point(cose)
+
+    # Contre-verification independante : la cle publique en DER produite par la reference
+    # (cryptography) doit correspondre au PEM construit par PHP a partir du map COSE. C est
+    # la seule facon de voir si les labels sont bien lus : un harnais qui ne fait que
+    # reprendre ce que l implementation lit ne peut pas voir l erreur.
     return {
         "name": name,
         "policy": policy,
         "user_verified": can_verify,
+        "point": None if key_point is None else b64url(key_point),
+        "der": None if refused else b64url(key.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )),
+        "refused": refused,
         "register": register,
         "assert": assertion,
         "replay": replay,
@@ -271,18 +310,34 @@ def main():
     u2f_data = auth_data(0x41, 1, u2f_id, u2f_cose, True)
     u2f_client = client_data("webauthn.create", ORIGIN)
     u2f_cert = self_signed(u2f_key)
-    point = b"\x04" + u2f_cose[-4] + u2f_cose[-5]
+    u2f_point = point(u2f_cose)
     u2f_message = (
         b"\x00"
         + hashlib.sha256(RP_ID.encode()).digest()
         + hashlib.sha256(u2f_client).digest()
         + u2f_id
-        + point
+        + u2f_point
     )
     u2f_stmt = {"sig": u2f_key.sign(u2f_message, ec.ECDSA(hashes.SHA256())), "x5c": [cbor(u2f_cert)], "counter": 0}
 
+    # Numerotation heritee de RFC 8152 : la meme cle, ecrite avec les labels que Chrome
+    # emet encore. Si l implementation ne lit qu une numerotation, une credential
+    # enregistree par un navigateur qui emet l autre est refusee sur l instance deployee.
+    legacy_key = ec.generate_private_key(ec.SECP256R1())
+
+    # Map qui melange les deux numerotations : kty = 1 (EC2) et alg = 3 (ES256), mais la
+    # courbe lue au label -1 vaut 2 (P-384) alors que les coordonnees font 32 octets. Il
+    # n est coherent avec aucune numerotation : il doit etre refuse.
+    numbers = ec_key.private_numbers().public_numbers
+    mixed = {1: 2, 3: -7, -1: 2, -2: numbers.x.to_bytes(32, "big"), -3: numbers.y.to_bytes(32, "big")}
+
+    # Cle OKP : type 1 du registre, pas une cle EC2 (2) ni RSA (3). Une cle RSA ne peut pas
+    # porter la valeur 1, c est le type OKP.
+    okp = {1: 1, 3: -8, -1: 4, -2: numbers.x.to_bytes(32, "big")}
+
     fixtures = [
         fixture("ec2_p256", ec_key, cose_ec(ec_key), "ES256", b"cred-ec2"),
+        fixture("ec2_p256_heritee", legacy_key, cose_ec(legacy_key, "heritee"), "ES256", b"cred-legacy"),
         fixture("rsa2048", rsa_key, cose_rsa(rsa_key), "RS256", b"cred-rsa"),
         fixture(
             "fido_u2f",
@@ -296,6 +351,8 @@ def main():
             att_stmt=u2f_stmt,
             bad_base=u2f_case(u2f_key, u2f_cose, u2f_id, u2f_data, u2f_client, u2f_cert),
         ),
+        fixture("map_incoherent", ec_key, mixed, "ES256", b"cred-mixed", refused="Cle COSE incomplete ou incoherente."),
+        fixture("cle_okp", ec_key, okp, "ES256", b"cred-okp", refused="Type de cle COSE non supporte."),
     ]
 
     print(json.dumps({"rp_id": RP_ID, "origin": ORIGIN, "challenge": b64url(CHALLENGE), "fixtures": fixtures}))

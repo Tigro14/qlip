@@ -30,6 +30,14 @@ function check(string $label, bool $ok, string $detail = ''): void
     echo $ok ? '  OK   ' : '  KO   ', $label, $detail !== '' ? ' : ' . $detail : '', PHP_EOL;
 }
 
+/** PEM -> DER : le DER produit par PHP doit etre celui de la reference Python. */
+function der_from_pem(string $pem): string
+{
+    $body = (string) preg_replace('/-----[A-Z ]+-----|\s+/', '', $pem);
+
+    return base64_decode($body, true) ?: '';
+}
+
 foreach ($json['fixtures'] as $fixture) {
     echo $fixture['name'], PHP_EOL;
 
@@ -68,8 +76,34 @@ foreach ($json['fixtures'] as $fixture) {
     check('cle COSE conservee', $registered['cose'] === $fixture['register']['cose']);
     check('compteur', $registered['sign_count'] === $fixture['register']['sign_count']);
 
-    $key = CoseKey::toPem(Cbor::decode(base64url_decode($registered['cose'])));
+    try {
+        $key = CoseKey::toPem(Cbor::decode(base64url_decode($registered['cose'])));
+    } catch (Throwable $error) {
+        if (($fixture['refused'] ?? null) !== null) {
+            check('cle refusee', $error->getMessage() === $fixture['refused'], $error->getMessage());
+        } else {
+            check('PEM', false, $error->getMessage());
+        }
+
+        continue;
+    }
+
+    if (($fixture['refused'] ?? null) !== null) {
+        check('cle refusee', false, 'acceptee : ' . $key['type']);
+        continue;
+    }
+
     check('PEM', str_contains($key['key'], '-----BEGIN PUBLIC KEY-----'), $key['type'] . '/' . $key['alg']);
+
+    // Contre-verification independante : le PEM construit par PHP doit donner exactement le
+    // DER que la reference Python produit a partir de la cle, et le point x962 doit correspondre
+    // au point des coordonnees. Comparer PHP a lui meme ne suffirait pas : une numerotation de
+    // labels lue de travers passerait les tests et echouerait devant un vrai navigateur.
+    check('DER identique a la reference', der_from_pem($key['key']) === base64url_decode((string) ($fixture['der'] ?? '')), $key['type']);
+
+    if ($key['type'] === 'EC2') {
+        check('point x962 identique a la reference', CoseKey::x962(Cbor::decode(base64url_decode($registered['cose']))) === base64url_decode((string) ($fixture['point'] ?? '')));
+    }
 
     // Format fido-u2f : la signature porte sur 0x00 || rpIdHash || clientDataHash ||
     // credentialId || publicKeyU2F, pas sur hash(authData) + hash(clientData). Une signature

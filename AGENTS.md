@@ -206,7 +206,13 @@ utilise le MTA local.
   meme sens est un contact (faces confondues des volumes bicolores), signale mais pas
   considere comme une erreur.
 - WebAuthn : AuthData = 32 octets de hash du RP ID + drapeaux + compteur, bloc AT a
-  l'offset 37 ; labels COSE negatifs ; signature raw `r||s` convertie en DER a la main
+  l'offset 37 ; labels COSE lus dans les deux numerotations (RFC 9053 : `kty` = 1, `alg` = 3,
+  puis courbe = -1, x = -2, y = -3 pour EC2, modulo = -1 et exposant = -2 pour RSA ; et la
+  numerotation heritee de RFC 8152, encore emise par Chrome : -1, -2, -3, -4, -5), avec les
+  valeurs du registre (`kty` EC2 = 2, RSA = 3, courbe P-256 = 1) ; une cle n'est retenue que
+  si elle est coherent avec une seule numerotation, et `tests/webauthn_check.php` compare le
+  PEM de PHP au DER produit par la reference Python : comparer PHP a lui meme ne suffit pas ;
+  signature raw `r||s` convertie en DER a la main
   (`fido-u2f` remet deja une signature DER, donc `Signature::verify()` prend un drapeau
   `$der`) ; tampons echanges en base64url. Formats d'attestation acceptes : `none`, `packed`
   (auto-attestation) et `fido-u2f` (`x5c` obligatoire, pas d'auto-attestation, pas d'AAGUID :

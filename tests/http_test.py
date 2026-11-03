@@ -227,7 +227,7 @@ class FakeAuthenticator:
         """
         auth_data = wf.auth_data(self.flags(0x41), 1, self.credential_id, self.cose, True, RP_ID)
         client_data = wf.client_data("webauthn.create", ORIGIN, challenge)
-        point = b"\x04" + self.cose[-4] + self.cose[-5]
+        point = wf.point(self.cose)
         message = (
             b"\x00"
             + hashlib.sha256(RP_ID.encode()).digest()
