@@ -320,7 +320,7 @@ def run():
 
     check("STL servi et etanche", status == 200 and solids and not problems and volume > 0.0, problems[0] if problems else "%.1f mm3" % volume)
 
-    status, _, body = get("/badges/%d/3mf", anonymous)
+    status, _, body = get("/badges/%d/3mf" % badge_id, anonymous)
 
     if not os.path.isdir(OUT):
         os.makedirs(OUT, exist_ok=True)
@@ -346,9 +346,16 @@ def run():
 
     check("suppression refusee sans confirmation", status == 400, str(data)[:60])
 
+    # GET sur une route de suppression : refusee par le routeur. Pour un badge, le mot
+    # delete est lu comme un format par le patron /badges/{id}/{format}, donc la liste
+    # fermee (stl, 3mf) repond 404. La route de page, elle, n'est pas concuure : 405.
     status, data = get_json("/badges/%d/delete" % badge_id, anonymous)
 
-    check("GET sur une route de suppression", status == 405, str(status))
+    check("GET sur une route de suppression, format refuse", status == 404, str(data)[:60])
+
+    status, _, body = get("/p/" + slug + "/delete", anonymous)
+
+    check("GET sur une route de suppression", status == 405, text(body)[:60])
 
     status, data = post_json("/badges/%d/delete" % badge_id, {"csrf": csrf, "confirm": "1"}, anonymous)
 
@@ -366,11 +373,14 @@ def run():
     check("QR de la page disparu", get("/qr/" + slug + ".png", anonymous)[0] == 404)
 
     # 8. Threpse, sur une session separee : le verou est par session, pas par compte.
+    # Le jeton CSRF est verifie avant le compteur : sans lui chaque tentative repond 400
+    # et le verou ne se declenche jamais, ce qui masquerait le controle.
     throttle = client(http.cookiejar.CookieJar())
+    throttle_csrf = csrf_of(get("/login", throttle)[2])
     last = 0
 
     for _ in range(9):
-        last = raw(throttle, "POST", "/login", {"email": EMAIL, "password": "pas-le-bon-mot"})[0]
+        last = raw(throttle, "POST", "/login", {"csrf": throttle_csrf, "email": EMAIL, "password": "pas-le-bon-mot"})[0]
 
     check("verou apres 8 tentatives", last == 429, str(last))
 
