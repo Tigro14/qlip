@@ -767,10 +767,11 @@ def run():
 
     # La page de connexion ne propose pas la ceremonie : le second facteur vient apres le mot de
     # passe, sur /login/2fa. Le lien d administration ne pouvait rien faire sans session confirmee
-    # par une assertion, et il dressait la page d administration sur la page de connexion.
+    # par une assertion, et il dressait la page d administration sur la page de connexion. Ce que la
+    # suite mesure est le lien, pas le mot : le pied de page nomme la cle, ce n est pas une entree.
     check(
         "page de connexion : pas de lien vers une ceremonie",
-        b"yubikey" not in get("/login", two)[2],
+        b"admin/yubikey" not in get("/login", two)[2],
         "le second facteur vient apres le mot de passe, la ceremonie est fermee sans session confirmee",
     )
 
