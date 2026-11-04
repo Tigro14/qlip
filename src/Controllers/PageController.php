@@ -68,18 +68,18 @@ final class PageController
         // par le mot de passe : le profil est 'presence', la cle prouve la possession.
         $this->app->ceremonyPolicy(Policy::PROFILE_PRESENCE);
 
-        // Les dimensions affichees sur chaque onglet viennent du design enregistre avec la
-        // creation, pas des valeurs par defaut du formulaire.
-        $badges = array_map(
-            fn (array $badge): array => $badge + ['dimensions' => $this->app->badges->designOf($badge)],
-            $this->app->badges->badgesOf((int) $user['id'])
+        // Une page = un badge : l onglet est la page. Les dimensions affichees viennent du design
+        // enregistre avec le badge, pas des valeurs par defaut du formulaire ; une page sans badge
+        // rend le design par defaut, qui est ce que son premier formulaire proposera.
+        $pages = array_map(
+            fn (array $page): array => $page + ['dimensions' => $this->app->badges->designOf($page)],
+            $this->app->badges->pagesWithBadge((int) $user['id'])
         );
 
         return Response::html($this->app->view->render('dashboard.php', [
             'title' => 'Mes pages',
             'user' => $user,
-            'pages' => $this->app->badges->pagesOf((int) $user['id']),
-            'badges' => $badges,
+            'pages' => $pages,
             'remaining' => $this->app->badges->remaining((int) $user['id']),
             'credentials' => $this->app->credentials->list((int) $user['id']),
             'rpId' => $this->app->config->rpId,

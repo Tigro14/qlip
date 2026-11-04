@@ -39,7 +39,7 @@ Configuration par variables d'environnement :
 | `QLIP_RP_ID` | hote de `QLIP_BASE_URL` | relying party WebAuthn |
 | `QLIP_ORIGINS` | `QLIP_BASE_URL` | origines acceptees (liste separee par des virgules) |
 | `QLIP_ADMIN_EMAILS` | vide | comptes administrateurs (liste separee par des virgules) |
-| `QLIP_DAILY_LIMIT` | `10` | creations de badge par jour et par compte |
+| `QLIP_DAILY_LIMIT` | `10` | creations et enregistrements de badge par jour et par compte |
 | `QLIP_MAIL_TRANSPORT` | `outbox` | `outbox`, `log`, `null`, `smtp` ou `local` |
 | `QLIP_SMTP_HOST` | vide | serveur SMTP, en TLS implicite |
 | `QLIP_SMTP_PORT` | `465` | port SMTP (465 = TLS implicite) |
@@ -143,7 +143,10 @@ titre 80 octets, telephone 40, email de contact 120 (et doit rester une adresse 
 note 500. Le `maxlength` d un formulaire n est pas une protection : on peut poster
 directement. Les valeurs sont stockees telles quelles et echappees au rendu par `e()`
 (`attr()` dans les attributs HTML). Le slug est limite a 32 caracteres et reduit a
-`[a-z0-9]`. Les parametres de badge (dimensions, couleurs) sont bornes dans `Design`.
+`[a-z0-9]`, et il est l identite de la page : un slug deja pris est refuse, il n est pas
+remplace par un autre, sinon la meme page existerait sous deux adresses et on ne saurait
+plus laquelle le QR imprime designe. Les parametres de badge (dimensions, couleurs) sont
+bornes dans `Design`.
 
 Les requetes SQL sont toutes en prepare, avec params nommes. Les en-tetes de securite sont
 poses sur toutes les reponses, y compris le JSON.
@@ -341,6 +344,13 @@ ne remplace pas le mot de passe, elle s'y ajoute.
 
 Un badge est une plaque arrondie avec un trou, et le QR code en relief ou grave.
 
+- Une page porte un seul badge : le QR encode le slug de la page, donc deux badges sur la meme
+  page seraient le meme QR montre deux fois. `POST /badges` enregistre le design du badge de la
+  page, il n en cree pas un second quand il existe deja. L index unique `badges_page_unique` est
+  la protection, pas une convention du service.
+- Le tableau de bord presente une ligne d onglets avec un onglet par page : QR, champs de la
+  page, design, liens de telechargement, et la suppression de la page avec son badge. Le
+  repli sans JavaScript est la liste complete des panneaux.
 - Monochrome : un seul solide, `engraved` (grave) ou `raised` (relief).
 - Bicolore : deux volumes (base + encre), chacun etanche, ecrits dans un .3MF avec les
   groupes de couleurs pour les slicers multicolores.
@@ -352,8 +362,8 @@ bicolores), signalees mais pas considerees comme des erreurs.
 
 ## Suppressions
 
-Le tableau de bord permet de supprimer une page (et les badges qui la portent), un badge,
-une cle de second facteur, ou le compte. Suppression definitive : ce qui est detruit ne revient
+Le tableau de bord permet de supprimer une page avec le badge qu elle porte (un seul bouton par
+onglet), une cle de second facteur, ou le compte. Suppression definitive : ce qui est detruit ne revient
 pas.
 
 - POST seulement : un GET ne doit pas detruire, un lien ne suffit pas ;
@@ -474,7 +484,9 @@ COMMIT;"
 
 Le quota de 10 creations par jour porte sur les evenements de creation (`action = 'badge'`
 dans `audit_log`), pas sur les lignes qui restent : supprimer un badge ne rembourse pas le
-quota. Sinon on pourrait creer, supprimer, creer sans limite.
+quota. Sinon on pourrait creer, supprimer, creer sans limite. Une page portant un seul badge,
+enregistrer le design d une page deja badgee est un evenement comme la premiere creation, donc
+il consomme une part du quota.
 
 ## Tests
 
@@ -501,10 +513,14 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    etre refusee pour chaque credential, dans les deux sens ;
 6. `tests/app_test.php` : routes sans HTTP (schema, inscription, verification, threpse,
    reinitialisation de mot de passe : lien usage unique, 24 h, adresse sans compte, verou de
-   5 demandes, jetons du compte fermes, pages, quotas par compte, exports etancheite, CSRF,
-   ceremony WebAuthn par la route, transports smtp et local : lien masque et echec d envoi
-   signale, suppressions avec confirmation, cascade, quota non rembourse, trace d audit, journal :
-   numero de page ramene, et effacement seulement de ce qui a plus de 2 mois avec sa trace) ;
+   5 demandes, jetons du compte fermes, pages (slug doublon refuse), quotas par compte, une page =
+   un badge (index unique, une ecriture directe en base refusee, page sans badge autorisee, et la
+   migration mesuree sur une base dans l ancien forme : trois badges pour une page, le plus recent
+   garde, une trace par ligne retiree avec un nom qui ne compte pas dans le quota), exports
+   etancheite, CSRF, ceremony WebAuthn par la route, transports smtp et local : lien masque et echec
+   d envoi signale, suppressions avec confirmation, cascade, quota non rembourse, trace d audit,
+   journal : numero de page ramene, et effacement seulement de ce qui a plus de 2 mois avec sa
+   trace) ;
 7. `tests/smtp_mock.py` + `tests/smtp_test.php` : le client SMTP ecrit a la main parle a un
    serveur mock TLS. Le mock verifie ce qu'il recoit (EHLO, base64 de `AUTH LOGIN`,
    `MAIL FROM`, `RCPT TO`, corps en CRLF, point double, QUIT), le script PHP verifie comment
@@ -517,8 +533,11 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
    qu'un code nonzero du MTA est signale comme un echec ;
 9. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
    le PNG decode par zxing, la ceremony WebAuthn par HTTP, la reinitialisation de mot de
-   passe (reponse identique pour une adresse sans compte, lien usage unique, verou), et les
-   suppressions (jeton, confirmation, compte, GET refuse en 405) ;
+   passe (reponse identique pour une adresse sans compte, lien usage unique, verou), les
+   suppressions (jeton, confirmation, compte, GET refuse en 405), et les onglets du tableau
+   de bord verifiees comme repli : un panneau par page, chaque onglet pointe sur son panneau,
+   aucun panneau masque dans le rendu, les roles ajoutes par le script et non par le template,
+   la page sans badge annoncee comme telle ;
 10. `tests/live_test.py` (lance par `tests/live.sh`) : protocole sur l instance deployee,
    voir la section suivante.
 

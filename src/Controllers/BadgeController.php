@@ -9,7 +9,9 @@ use Qlip\App\Request;
 use Qlip\App\Response;
 
 /**
- * Creations de badges (quota) et telechargement des fichiers STL / 3MF.
+ * Enregistrement du design d une page (quota) et telechargement des fichiers STL / 3MF.
+ * Une page porte un seul badge : POST /badges enregistre le badge de la page, il n en cree
+ * pas un second.
  */
 final class BadgeController
 {
@@ -20,7 +22,7 @@ final class BadgeController
         $this->app = $app;
     }
 
-    public function create(Request $request): Response
+    public function save(Request $request): Response
     {
         $user = $this->app->currentUser();
 
@@ -57,7 +59,7 @@ final class BadgeController
         }
 
         try {
-            $badge = $this->app->badges->createBadge((int) $user['id'], (int) $page['id'], $request->body);
+            $badge = $this->app->badges->saveBadge((int) $user['id'], (int) $page['id'], $request->body);
         } catch (\Throwable $error) {
             if ($request->wantsJson()) {
                 return Response::json(['error' => $error->getMessage()], 422);
@@ -75,7 +77,7 @@ final class BadgeController
             ], 201);
         }
 
-        $this->app->flash('Badge ' . $badge['id'] . ' cree.');
+        $this->app->flash('Badge ' . $badge['id'] . ' enregistre.');
 
         return Response::redirect($this->app->url('dashboard'));
     }

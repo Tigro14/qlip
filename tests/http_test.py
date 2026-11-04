@@ -349,8 +349,9 @@ def run():
     check("email de contact refuse", status == 422, as_json(body).get("error", ""))
 
     status, headers, body = post("/pages", {"csrf": csrf, "title": "Long slug", "slug": "s" * 60})
+    long_slug = headers.get("location", "").split("/p/")[-1].strip("/")
 
-    check("slug tronque", status == 302 and len(headers.get("location", "").split("/p/")[-1].strip("/")) == 32)
+    check("slug tronque", status == 302 and len(long_slug) == 32, long_slug)
 
     # 5. Le PNG doit se decoder et redonner l URL de la page
     status, headers, body = get("/qr/" + slug + ".png")
@@ -371,32 +372,46 @@ def run():
 
     check("CSRF refuse", status == 400, data.get("error", ""))
 
+    # 7. Quota : 10 enregistrements par jour et par compte. Une page porte un seul badge, donc
+    # enregistrer la meme page dix fois ne fait pas dix badges : le quota compte les evenements
+    # du journal, pas les lignes qui restent.
     created = []
 
     for index in range(10):
-        payload = {"csrf": csrf, "slug": slug, "style": "engraved", "bicolor": "1" if index == 4 else "0"}
+        payload = {"csrf": csrf, "slug": slug, "style": "engraved", "bicolor": "1" if index == 9 else "0"}
 
-        # Des dimensions qui ne sont pas les valeurs par defaut du formulaire : l onglet doit
-        # afficher le design enregistre avec la creation, pas ce que le formulaire propose.
-        if index == 2:
+        # Des dimensions qui ne sont pas les valeurs par defaut : le panneau doit afficher le
+        # design enregistre, pas ce que le formulaire propose. Le dernier enregistrement est
+        # celui qui reste en base, et le bicolore est garde pour les telechargements.
+        if index == 9:
             payload.update({"width": 25, "height": 55, "thickness": 4, "depth": 1.5})
 
         status, data = post_json("/badges", payload)
 
         if status != 201:
-            check("badge %d" % (index + 1), False, data.get("error", ""))
+            check("enregistrement %d" % (index + 1), False, data.get("error", ""))
             break
 
         created.append(data["badge"]["id"])
 
-    check("10 badges", len(created) == 10, "%d" % len(created))
+    check("10 enregistrements", len(created) == 10, "%d" % len(created))
+    check("un seul badge pour la page", len(set(created)) == 1, "%d ids distincts" % len(set(created)))
+
+    status, data = post_json("/pages", {"csrf": csrf, "title": "La meme page encore", "slug": slug})
+
+    check("page doublon refusee", status == 422, data.get("error", ""))
 
     status, data = post_json("/badges", {"csrf": csrf, "slug": slug, "style": "engraved"})
 
     check("11e refusee", status == 422, data.get("error", ""))
 
+    # Une page sans badge : le panneau doit le dire, il n a pas de lien de telechargement.
+    status, _, body = post("/pages", {"csrf": csrf, "title": "Sans badge", "slug": "sansbadge"})
+
+    check("page sans badge creee", status == 302, str(status))
+
     # 8. Telechargements STL et 3MF
-    status, headers, body = get("/badges/%d/stl" % created[4])
+    status, headers, body = get("/badges/%d/stl" % created[0])
 
     check("STL", status == 200 and headers.get("content-type") == "model/stl", headers.get("content-disposition", ""))
 
@@ -409,7 +424,7 @@ def run():
 
     check("STL etanche", problems == [] and volume > 0.0, problems[0] if problems else "%d triangles" % len(solids[0]["facets"]))
 
-    status, headers, threeMf = get("/badges/%d/3mf" % created[4])
+    status, headers, threeMf = get("/badges/%d/3mf" % created[0])
 
     check("3MF", status == 200 and headers.get("content-type") == "model/3mf")
 
@@ -421,50 +436,53 @@ def run():
 
     check("3MF valide", problems == [], problems[0] if problems else "%d triangles" % sum(counts))
 
-    # 8b. Onglets de badges sur le tableau de bord. Le script n est pas execute par la suite,
-    # donc ce que la suite verifie est le repli : le template rend la liste complete, sans
-    # dependre du script. Les roles d onglets sont poses par tabs.js, et ils ne sont vrais que
+    # 8b. Onglets : un onglet par page, avec le badge de cette page. Le script n est pas execute
+    # par la suite, donc ce qu elle verifie est le repli : le template rend la liste complete,
+    # sans dependre du script. Les roles d onglets sont poses par tabs.js et ne sont vrais que
     # quand un seul panneau est montre, donc ils ne doivent pas etre dans le template.
 
-    status, _, body = get("/dashboard")
+    status, _, dashboard = get("/dashboard")
 
-    check("onglets presents sur le tableau de bord", status == 200 and b"data-tabs" in body and b'class="tablist"' in body)
+    check("onglets presents sur le tableau de bord", status == 200 and b"data-tabs" in dashboard and b'class="tablist"' in dashboard)
 
-    panels = [(int(m.group(1)), m.group(2)) for m in re.finditer(rb'<section class="panel" id="badge-(\d+)">(.*?)</section>', body, flags=re.S)]
-    tabs = re.findall(rb'<a class="tab" id="tab-(\d+)" href="#badge-(\d+)"', body)
+    panels = {m.group(1).decode(): m.group(2) for m in re.finditer(rb'<section class="panel" id="page-([a-z0-9]+)">(.*?)</section>', dashboard, flags=re.S)}
+    tabs = [(a.decode(), b.decode()) for a, b in re.findall(rb'<a class="tab" id="tab-([a-z0-9]+)" href="#page-([a-z0-9]+)"', dashboard, flags=re.S)]
 
-    check("un panneau par badge", sorted(n for n, _ in panels) == sorted(created), "%d panneaux" % len(panels))
-    check(
-        "chaque onglet pointe sur son panneau",
-        len(tabs) == len(created) and all(tab[0] == tab[1] for tab in tabs),
-        "%d onglets" % len(tabs),
-    )
+    check("un panneau par page", sorted(panels) == sorted([slug, long_slug, "sansbadge"]), ", ".join(sorted(panels)))
+    check("chaque onglet pointe sur son panneau", sorted(tabs) == sorted((p, p) for p in panels), "%d onglets" % len(tabs))
     check(
         "repli sans JavaScript : le template ne masque aucun panneau",
-        re.search(rb'<section class="panel"[^>]*hidden', body) is None,
+        re.search(rb'<section class="panel"[^>]*hidden', dashboard) is None,
         "le script ajoute hidden quand il s execute, le template rend la liste",
     )
     check(
         "les roles d onglets ne sont pas dans le template",
-        b'role="tab"' not in body and b'role="tabpanel"' not in body,
+        b'role="tab"' not in dashboard and b'role="tabpanel"' not in dashboard,
         "un role=tab avec tous les panneaux ouverts annoncerait des onglets sur une page qui n en est pas",
     )
     check(
-        "les liens et la suppression sont dans le panneau",
-        all((b"/badges/%d/stl" % n) in block and (b"/badges/%d/3mf" % n) in block and (b"/badges/%d/delete" % n) in block for n, block in panels),
+        "le panneau porte la page, le design et la suppression",
+        all(b'name="slug"' in block and (b"/p/%s/delete" % p.encode()) in block for p, block in panels.items()),
+        "un onglet par page, pas une ligne par creation",
+    )
+    check(
+        "le panneau de la page badgee porte les liens de telechargement",
+        (b"/badges/%d/stl" % created[0]) in panels[slug] and (b"/badges/%d/3mf" % created[0]) in panels[slug],
         "le panneau, pas la ligne d onglet",
     )
-    check("le panneau montre l apercu du QR", all(b'<img class="qr"' in block for _, block in panels))
+    check(
+        "le panneau d une page sans badge le dit et n a pas de lien",
+        b"Pas de badge" in panels["sansbadge"] and b"/stl" not in panels["sansbadge"] and b"/3mf" not in panels["sansbadge"],
+        "la page existe avant son premier badge : le formulaire propose de le creer",
+    )
+    check("le panneau montre l apercu du QR", all(b'<img class="qr"' in block for block in panels.values()))
 
-    # Les dimensions affichees viennent du design enregistre, donc le badge cree avec 25 x 55
+    # Les dimensions affichees viennent du design enregistre, donc la page enregistree en 25 x 55
     # doit les rendre, et les valeurs par defaut ne doivent pas apparaitre sur son panneau.
-    panel = dict(panels)
-    block = panel.get(created[2], b"")
-
     check(
         "dimensions du design enregistre, pas les valeurs par defaut",
-        b"25 x 55 mm" in block and b"epaisseur 4 mm" in block and b"profondeur 1.5 mm" in block and b"34 x 40 mm" not in block,
-        str(block[:120]),
+        b"25 x 55 mm" in panels[slug] and b"epaisseur 4 mm" in panels[slug] and b"profondeur 1.5 mm" in panels[slug] and b"34 x 40 mm" not in panels[slug],
+        str(panels.get(slug, b"")[:120]),
     )
 
     # 9. YubiKey : enregistrement puis assertion

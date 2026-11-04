@@ -49,7 +49,7 @@ function qlip_routes(App $app): Router
     $router->post('/p/{slug}/delete', fn (Request $request): Response => $pages->delete($request));
     $router->get('/qr/{slug}.png', fn (Request $request): Response => $pages->qr($request));
 
-    $router->post('/badges', fn (Request $request): Response => $badges->create($request));
+    $router->post('/badges', fn (Request $request): Response => $badges->save($request));
     $router->post('/badges/{id}/delete', fn (Request $request): Response => $badges->delete($request));
     $router->get('/badges/{id}/{format}', fn (Request $request): Response => $badges->download($request));
 

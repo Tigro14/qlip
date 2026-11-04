@@ -4,11 +4,15 @@
     <p class="note">
         Comptes : 10 creations de badge par jour.
         Aujourd'hui : <?= (int) $remaining ?> restante<?= $remaining === 1 ? '' : 's' ?>.
-        Supprimer ne rembourse pas le quota.
+        Une page porte un seul badge, et chaque enregistrement de son design consomme une
+        creation. Supprimer ne rembourse pas le quota.
     </p>
 
     <h2>Creer une page de contact</h2>
 
+    <!-- Le slug est l identite de la page : ce que le QR encode. Un slug deja pris est refuse,
+         il n est pas remplace par un autre : sinon la page existerait sous deux adresses et on
+         ne saurait plus laquelle le QR imprime designe. -->
     <form method="post" action="<?= attr(url('pages')) ?>">
         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
@@ -21,115 +25,90 @@
         <button type="submit">Creer</button>
     </form>
 
-    <h2>Pages</h2>
+    <h2>Pages et badges</h2>
 
     <?php if ($pages === []): ?>
         <p class="note">Aucune page.</p>
     <?php endif; ?>
 
-    <?php foreach ($pages as $page): ?>
-        <article class="card">
-            <h3><a href="<?= attr(url('p/' . $page['slug'])) ?>"><?= e($page['title']) ?></a></h3>
-            <p class="note">/<code><?= e($page['slug']) ?></code> &mdash;
-                <img class="qr" src="<?= attr(url('qr/' . $page['slug'] . '.png')) ?>" alt="QR" width="120" height="120">
-            </p>
-
-            <form method="post" action="<?= attr(url('p/' . $page['slug'])) ?>">
-                <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
-                <label>Titre<input type="text" name="title" value="<?= e($page['title']) ?>" required></label>
-                <label>Telephone<input type="text" name="phone" value="<?= e($page['phone'] ?? '') ?>"></label>
-                <label>Email<input type="email" name="email_contact" value="<?= e($page['email_contact'] ?? '') ?>"></label>
-                <label>Note<textarea name="note"><?= e($page['note'] ?? '') ?></textarea></label>
-                <button type="submit">Enregistrer</button>
-            </form>
-
-            <form method="post" action="<?= attr(url('p/' . $page['slug'] . '/delete')) ?>">
-                <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
-
-                <label><input type="checkbox" name="confirm" value="1"> Confirmer la suppression</label>
-                <button type="submit">Supprimer la page</button>
-            </form>
-        </article>
-    <?php endforeach; ?>
-
-    <h2>Creer un badge</h2>
-
-    <!-- Le filigrane est une regle de la feuille (style-src 'self' interdit le style dans
-         la vue) : il ne peut pas etre pose par la balise, donc la carte le porte par une
-         classe. C est une decoration, le contenu reste lu dans l ordre. -->
-    <form class="card watermark" method="post" action="<?= attr(url('badges')) ?>">
-        <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
-
-        <label>
-            Page
-            <select name="slug" required>
-                <?php foreach ($pages as $page): ?>
-                    <option value="<?= e($page['slug']) ?>"><?= e($page['slug']) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </label>
-
-        <label>
-            Style
-            <select name="style">
-                <option value="engraved">Grave (monochrome)</option>
-                <option value="raised">Relief</option>
-            </select>
-        </label>
-
-        <label><input type="checkbox" name="bicolor" value="1"> Bicolore (2 volumes + 3MF)</label>
-        <label>Largeur mm<input type="number" name="width" value="34" min="20" max="60" step="0.5"></label>
-        <label>Hauteur mm<input type="number" name="height" value="40" min="20" max="70" step="0.5"></label>
-        <label>Epaisseur mm<input type="number" name="thickness" value="3" min="1" max="6" step="0.1"></label>
-        <label>Profondeur mm<input type="number" name="depth" value="0.8" min="0.4" max="2" step="0.1"></label>
-
-        <button type="submit">Creer le badge</button>
-    </form>
-
-    <h2>Creations</h2>
-
-    <?php if ($badges === []): ?>
-        <p class="note">Aucun badge.</p>
-    <?php endif; ?>
-
-    <?php if ($badges !== []): ?>
-        <!-- Le contenu ne depend pas du script : les onglets sont des liens vers une ancre et
-             tous les panneaux sont rendus, donc sans JavaScript la page reste une liste. Le
-             script ajoute les roles d onglets et masque le panneau non choisi, il ne remplace
-             rien. -->
+    <?php if ($pages !== []): ?>
+        <!-- Une page = un badge : l onglet est la page, pas la creation. Le contenu ne depend
+             pas du script : les onglets sont des liens vers une ancre et tous les panneaux sont
+             rendus, donc sans JavaScript la page reste une liste. Le script ajoute les roles
+             d onglets et masque le panneau non choisi, il ne remplace rien. -->
         <div class="tabs" data-tabs>
             <div class="tablist">
-                <?php foreach ($badges as $badge): ?>
-                    <a class="tab" id="tab-<?= (int) $badge['id'] ?>" href="#badge-<?= (int) $badge['id'] ?>">
-                        #<?= (int) $badge['id'] ?> <code><?= e($badge['slug'] ?? '') ?></code>
+                <?php foreach ($pages as $page): ?>
+                    <a class="tab" id="tab-<?= attr((string) $page['slug']) ?>" href="#page-<?= attr((string) $page['slug']) ?>">
+                        <?= e($page['title']) ?>
                     </a>
                 <?php endforeach; ?>
             </div>
 
-            <?php foreach ($badges as $badge): ?>
-                <section class="panel" id="badge-<?= (int) $badge['id'] ?>">
-                    <img class="qr" src="<?= attr(url('qr/' . $badge['slug'] . '.png')) ?>"
-                         alt="QR de la page <?= attr($badge['slug'] ?? '') ?>" width="120" height="120">
+            <?php foreach ($pages as $page): ?>
+                <section class="panel" id="page-<?= attr((string) $page['slug']) ?>">
+                    <p class="note">
+                        <a href="<?= attr(url('p/' . $page['slug'])) ?>">/<code><?= e($page['slug']) ?></code></a>
+                    </p>
+
+                    <img class="qr" src="<?= attr(url('qr/' . $page['slug'] . '.png')) ?>"
+                         alt="QR de la page <?= attr((string) $page['slug']) ?>" width="120" height="120">
 
                     <p class="note">
-                        <code><?= e($badge['slug'] ?? '') ?></code> -
-                        <?= e($badge['style']) ?> -
-                        bicolore <?= $badge['bicolor'] ? 'oui' : 'non' ?> -
-                        <?= (float) ($badge['dimensions']['width'] ?? 0) ?> x <?= (float) ($badge['dimensions']['height'] ?? 0) ?> mm,
-                        epaisseur <?= (float) ($badge['dimensions']['thickness'] ?? 0) ?> mm,
-                        profondeur <?= (float) ($badge['dimensions']['depth'] ?? 0) ?> mm
+                        <?php if ($page['badge_id'] === null): ?>
+                            Pas de badge sur cette page.
+                        <?php else: ?>
+                            badge <?= (int) $page['badge_id'] ?> -
+                            <?= e((string) $page['style']) ?> -
+                            bicolore <?= $page['bicolor'] ? 'oui' : 'non' ?> -
+                            <?= (string) $page['dimensions']['width'] ?> x <?= (string) $page['dimensions']['height'] ?> mm,
+                            epaisseur <?= (string) $page['dimensions']['thickness'] ?> mm,
+                            profondeur <?= (string) $page['dimensions']['depth'] ?> mm -
+                            <a class="button" href="<?= attr(url('badges/' . $page['badge_id'] . '/stl')) ?>">STL</a>
+                            <a class="button" href="<?= attr(url('badges/' . $page['badge_id'] . '/3mf')) ?>">3MF</a>
+                        <?php endif; ?>
                     </p>
 
-                    <p>
-                        <a class="button" href="<?= attr(url('badges/' . $badge['id'] . '/stl')) ?>">STL</a>
-                        <a class="button" href="<?= attr(url('badges/' . $badge['id'] . '/3mf')) ?>">3MF</a>
-                    </p>
+                    <!-- Le filigrane est une regle de la feuille (style-src 'self' interdit le
+                         style dans la vue) : il ne peut pas etre pose par la balise, donc la carte
+                         le porte par une classe. C est une decoration, le contenu reste lu dans
+                         l ordre. -->
+                    <form class="card watermark" method="post" action="<?= attr(url('badges')) ?>">
+                        <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+                        <input type="hidden" name="slug" value="<?= attr((string) $page['slug']) ?>">
 
-                    <form method="post" action="<?= attr(url('badges/' . $badge['id'] . '/delete')) ?>">
+                        <label>
+                            Style
+                            <select name="style">
+                                <option value="engraved"<?= $page['style'] === 'engraved' ? ' selected' : '' ?>>Grave (monochrome)</option>
+                                <option value="raised"<?= $page['style'] === 'raised' ? ' selected' : '' ?>>Relief</option>
+                            </select>
+                        </label>
+
+                        <label><input type="checkbox" name="bicolor" value="1"<?= $page['bicolor'] ? ' checked' : '' ?>> Bicolore (2 volumes + 3MF)</label>
+                        <label>Largeur mm<input type="number" name="width" value="<?= attr((string) $page['dimensions']['width']) ?>" min="20" max="60" step="0.5"></label>
+                        <label>Hauteur mm<input type="number" name="height" value="<?= attr((string) $page['dimensions']['height']) ?>" min="20" max="70" step="0.5"></label>
+                        <label>Epaisseur mm<input type="number" name="thickness" value="<?= attr((string) $page['dimensions']['thickness']) ?>" min="1" max="6" step="0.1"></label>
+                        <label>Profondeur mm<input type="number" name="depth" value="<?= attr((string) $page['dimensions']['depth']) ?>" min="0.4" max="2" step="0.1"></label>
+
+                        <button type="submit"><?= $page['badge_id'] === null ? 'Creer le badge' : 'Enregistrer le design' ?></button>
+                    </form>
+
+                    <form method="post" action="<?= attr(url('p/' . $page['slug'])) ?>">
+                        <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
+
+                        <label>Titre<input type="text" name="title" value="<?= e($page['title']) ?>" required></label>
+                        <label>Telephone<input type="text" name="phone" value="<?= e($page['phone'] ?? '') ?>"></label>
+                        <label>Email<input type="email" name="email_contact" value="<?= e($page['email_contact'] ?? '') ?>"></label>
+                        <label>Note<textarea name="note"><?= e($page['note'] ?? '') ?></textarea></label>
+                        <button type="submit">Enregistrer la page</button>
+                    </form>
+
+                    <form method="post" action="<?= attr(url('p/' . $page['slug'] . '/delete')) ?>">
                         <input type="hidden" name="csrf" value="<?= e($csrf ?? '') ?>">
 
                         <label><input type="checkbox" name="confirm" value="1" required> Confirmer la suppression</label>
-                        <button type="submit">Supprimer</button>
+                        <button type="submit">Supprimer la page et son badge</button>
                     </form>
                 </section>
             <?php endforeach; ?>

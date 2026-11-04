@@ -10,6 +10,7 @@ use Qlip\App\Config;
 use Qlip\App\Request;
 use Qlip\App\Response;
 use Qlip\App\Session;
+use Qlip\Db;
 use Qlip\Stl\Design;
 use Qlip\Stl\StlWriter;
 use Qlip\Stl\ThreeMfWriter;
@@ -98,6 +99,74 @@ check('schema', $tables === [
     'verify_tokens',
     'webauthn_credentials',
 ], implode(', ', $tables));
+
+// Une page porte un seul badge. L index est une protection, pas une convention du service :
+// sans lui, deux ecritures pour la meme page donneraient deux badges portant le meme QR.
+$appIndexes = array_column($app->db->all("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name"), 'name');
+
+check('index unique par page', in_array('badges_page_unique', $appIndexes, true), implode(', ', $appIndexes));
+
+// 1b. Migration d une base creee avant la regle. La base de production n est jamais
+// reconstruite, donc la migration est mesuree sur une base dans l ancien forme : les memes
+// tables, sans l index unique, avec trois badges pour la meme page. On ne peut pas la fabriquer
+// avec new Db() seul : le constructeur pose l index, et trois badges ne passeraient pas. On
+// ouvre une base, on enleve l index, on met trois badges, puis on la rouvre : c est l etat que
+// la migration trouve sur le serveur.
+$oldPath = $out . '/old_shape.sqlite';
+
+foreach (glob($oldPath . '*') as $stale) {
+    if (is_file($stale)) {
+        unlink($stale);
+    }
+}
+
+$old = new Db($oldPath);
+
+$old->exec(
+    'INSERT INTO users (email, password_hash, is_admin, verified_at, created_at)
+     VALUES (:email, :hash, 0, NULL, :created_at)',
+    [':email' => 'migration@qlip.test', ':hash' => 'pas-un-hash', ':created_at' => now()]
+);
+$oldUserId = (int) $old->pdo()->lastInsertId();
+
+$old->exec(
+    'INSERT INTO pages (slug, user_id, title, created_at) VALUES (:slug, :user_id, :title, :created_at)',
+    [':slug' => 'ancienne-page', ':user_id' => $oldUserId, ':title' => 'Ancienne page', ':created_at' => now()]
+);
+$oldPageId = (int) $old->pdo()->lastInsertId();
+
+// L index est enleve pour reproduire l ancien forme : sans lui rien n'empechait deux badges
+// pour une page, et c est ce que la migration doit trouver.
+$old->exec('DROP INDEX badges_page_unique');
+
+for ($index = 1; $index <= 3; $index++) {
+    $old->exec(
+        'INSERT INTO badges (page_id, user_id, style, bicolor, design, created_at)
+         VALUES (:page_id, :user_id, :style, 0, :design, :created_at)',
+        [
+            ':page_id' => $oldPageId,
+            ':user_id' => $oldUserId,
+            ':style' => 'engraved',
+            ':design' => '{"width":' . $index . '}',
+            ':created_at' => now(),
+        ]
+    );
+}
+
+$newest = (int) $old->one('SELECT MAX(id) AS newest FROM badges WHERE page_id = :page_id', [':page_id' => $oldPageId])['newest'];
+
+$old = new Db($oldPath);
+
+$kept = (int) $old->one('SELECT id FROM badges WHERE page_id = :page_id', [':page_id' => $oldPageId])['id'];
+$traces = $old->count("SELECT COUNT(*) FROM audit_log WHERE action = 'badge_doublon_supprime'", []);
+$quota = $old->count("SELECT COUNT(*) FROM audit_log WHERE action = 'badge'", []);
+$indexes = array_column($old->all("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name"), 'name');
+
+check('migration : le badge le plus recent est garde', $kept === $newest, (string) $kept);
+check('migration : les doublons sont retires', $old->count('SELECT COUNT(*) FROM badges WHERE page_id = :page_id', [':page_id' => $oldPageId]) === 1);
+check('migration : une trace par ligne retiree', $traces === 2, (string) $traces);
+check('migration : la trace ne compte pas dans le quota', $quota === 0, (string) $quota);
+check('migration : l index est pose apres le tri', in_array('badges_page_unique', $indexes, true), implode(', ', $indexes));
 
 // 2. Inscription : compte non verifie, email dans l outbox
 $response = $send('POST', '/register', ['email' => 'admin@qlip.test', 'password' => 'mot-de-passe-long']);
@@ -322,6 +391,14 @@ $response = $send('POST', '/p/portefeuille', ['title' => 'Portefeuille trouve', 
 check('edition de page', $response->status() === 302);
 check('note enregistree', ($app->badges->pageBySlug('portefeuille')['note'] ?? '') === 'Mis de cote au bureau.');
 
+// Le slug est l identite de la page : ce que le QR encode. Un slug deja pris n est pas remplace
+// par un autre, sinon la meme page existerait sous deux adresses et on ne saurait plus laquelle
+// le QR imprime designe.
+$response = $send('POST', '/pages', ['title' => 'Encore le portefeuille', 'slug' => 'portefeuille']);
+
+check('page doublon refusee', $response->status() === 422, json_decode($response->body(), true)['error'] ?? '');
+check('page doublon non creee', count($app->db->all("SELECT id FROM pages WHERE slug = 'portefeuille'")) === 1);
+
 // Un autre compte ne peut pas editer la page d un tiers
 $other = $app->users->register('quelqu-un@qlip.test', 'un-mot-de-passe-long');
 $otherUser = $other['user'];
@@ -332,7 +409,8 @@ $app->session = new Session(['token' => random_token(16), 'user_id' => (int) $ot
 check('page d un autre compte', $send('POST', '/p/portefeuille', ['title' => 'Vol'])->status() === 403);
 check('page de l autre compte', $send('GET', '/p/autre')->status() === 200);
 
-// 9. Quota : 10 badges par jour et par compte
+// 9. Quota : 10 enregistrements par jour et par compte. Une page porte un seul badge, donc
+// enregistrer la meme page dix fois ne fait pas dix badges.
 $otherUser = $app->users->find((int) $otherUser['id']);
 
 check('compte non verifie refuse', $send('POST', '/badges', ['slug' => 'autre'])->status() === 403);
@@ -355,31 +433,58 @@ for ($index = 1; $index <= 10; $index++) {
     $response = $send('POST', '/badges', [
         'slug' => 'portefeuille',
         'style' => $index % 2 === 0 ? 'raised' : 'engraved',
-        'bicolor' => $index === 3 ? '1' : '0',
+        'bicolor' => $index === 10 ? '1' : '0',
     ]);
 
     if ($response->status() !== 201) {
-        check('badge ' . $index, false, $response->body());
+        check('enregistrement ' . $index, false, $response->body());
         break;
     }
 
     $badgeIds[] = (int) json_decode($response->body(), true)['badge']['id'];
 }
 
-check('10 badges creationnes', count($badgeIds) === 10, (string) count($badgeIds));
+check('10 enregistrements', count($badgeIds) === 10, (string) count($badgeIds));
+check('un seul badge pour la page', count(array_unique($badgeIds)) === 1, implode(',', array_unique($badgeIds)));
 check('quota consomme', $app->badges->usedToday((int) $admin['id']) === 10);
+
+// Une page sans badge est normale : le formulaire du panneau propose son premier badge.
+$noBadge = $app->badges->createPage((int) $admin['id'], ['title' => 'Page sans badge', 'slug' => 'sansbadge']);
+
+check('page sans badge', $app->badges->badgeByPage((int) $noBadge['id']) === null);
+
+// L index est la protection, pas le service : une ecriture directe pour une page deja badgee est
+// refusee. Sans lui, dix enregistrements feraient dix badges portant le meme QR.
+try {
+    $app->db->exec(
+        'INSERT INTO badges (page_id, user_id, style, bicolor, design, created_at)
+         VALUES (:page_id, :user_id, :style, :bicolor, :design, :created_at)',
+        [
+            ':page_id' => (int) $page['id'],
+            ':user_id' => (int) $admin['id'],
+            ':style' => 'engraved',
+            ':bicolor' => 0,
+            ':design' => '{}',
+            ':created_at' => now(),
+        ]
+    );
+
+    check('second badge pour la meme page refuse en base', false, 'insert accepte');
+} catch (\Throwable $error) {
+    check('second badge pour la meme page refuse en base', str_contains($error->getMessage(), 'UNIQUE'), $error->getMessage());
+}
 
 $response = $send('POST', '/badges', ['slug' => 'portefeuille']);
 
 check('11e refusee', $response->status() === 422, $response->body());
 
 // 10. Exports
-$export = $app->badges->export($app->badges->badgeById($badgeIds[2]));
+$export = $app->badges->export($app->badges->badgeById($badgeIds[0]));
 
 check('STL ASCII', str_starts_with($export['stl'], 'solid'));
 check('3MF est un ZIP', str_starts_with($export['threeMf'], "PK\x03\x04"));
 check('deux volumes en bicolore', count($export['volumes']) === 2);
-check('un volume en monochrome', count($app->badges->export($app->badges->badgeById($badgeIds[0]))['volumes']) === 1);
+check('un volume en monochrome', count($app->badges->export($app->badges->badgeByPage((int) $otherPage['id']))['volumes']) === 1);
 
 $problems = [];
 $triangles = 0;

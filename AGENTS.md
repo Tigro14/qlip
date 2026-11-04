@@ -252,6 +252,15 @@ utilise le MTA local.
   par `PRAGMA table_info`, la base de production n'est jamais reconstruite. Une credential enregistree
   avant `fmt` porte la valeur par defaut, pas un fait : son format n'etait pas stocke, donc la cle
   doit etre enregistree de nouveau ou la ligne reglee a partir de la mesure.
+- Une page porte un seul badge : index unique `badges_page_unique`, et `POST /badges` enregistre
+  le badge de la page au lieu d en creer un second. La migration garde le badge le plus recent par
+  page et ecrit une ligne d audit par ligne retiree, avec un nom distinct (`badge_doublon_supprime`)
+  pour ne pas compter dans le quota, parce qu une destruction faite hors des routes doit se
+  distinguer d une action de l application.
+- Les onglets du tableau de bord ne sont pas un rendu de la CSS : la CSS ne sait pas associer un
+  onglet a son panneau quand le nombre est variable. Le template rend la liste complete des
+  panneaux, `tabs.js` ajoute les roles et masque ceux qui ne sont pas choisis. Les roles ne sont
+  pas dans le template parce qu ils ne sont vrais que quand un seul panneau est montre.
 - `session_status()` peut mentir avec un binaire PHP statique : la logique s'appuie sur
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et
@@ -264,9 +273,10 @@ utilise le MTA local.
   verification d'email. Sans lui, un compte non active n'aurait plus aucun moyen d'entrer
   (le lien de verification est usage unique lui aussi). Ce n'est pas une faille a corriger.
 - Quota : il porte sur les evenements de creation dans `audit_log` (`action = 'badge'`),
-  pas sur les lignes qui restent. Les actions de suppression ont des noms distincts
-  (`badge_supprime`, `page_supprimee`, `compte_supprime`, `credential_supprimee`) pour ne pas
-  polluer le comptage.
+  pas sur les lignes qui restent. Une page porte un seul badge, donc enregistrer le design
+  d une page deja badgee est un evenement compte comme la premiere creation. Les actions de
+  suppression ont des noms distincts (`badge_supprime`, `page_supprimee`, `compte_supprime`,
+  `credential_supprimee`) pour ne pas polluer le comptage.
 - Trace de suppression du compte : ecrite apres le DELETE, avec l'adresse dans le detail,
   parce que `audit_log.user_id` devient NULL (`ON DELETE SET NULL`).
 - `proc_open` : les descripteurs sont lus du cote de l'enfant. Le stdin de l'enfant est

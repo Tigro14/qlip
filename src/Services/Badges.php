@@ -53,7 +53,7 @@ final class Badges
             $fields['title'] = 'Objet trouve';
         }
 
-        $slug = $this->uniqueSlug((string) ($input['slug'] ?? ''));
+        $slug = $this->newSlug((string) ($input['slug'] ?? ''));
 
         $this->db->exec(
             'INSERT INTO pages (slug, user_id, title, phone, email_contact, note, created_at)
@@ -111,12 +111,18 @@ final class Badges
         return $this->db->all('SELECT * FROM pages WHERE user_id = :user_id ORDER BY id DESC', [':user_id' => $userId]);
     }
 
-    /** @return list<array<string, mixed>> */
-    public function badgesOf(int $userId): array
+    /**
+     * Pages du compte avec le badge qu elles portent, une par page. Une page peut ne pas avoir
+     * de badge : l onglet presente alors le formulaire de la premiere creation.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function pagesWithBadge(int $userId): array
     {
         return $this->db->all(
-            'SELECT b.*, p.slug FROM badges b JOIN pages p ON p.id = b.page_id
-             WHERE b.user_id = :user_id ORDER BY b.id DESC',
+            'SELECT p.*, b.id AS badge_id, b.style, b.bicolor, b.design
+             FROM pages p LEFT JOIN badges b ON b.page_id = p.id
+             WHERE p.user_id = :user_id ORDER BY p.id DESC',
             [':user_id' => $userId]
         );
     }
@@ -137,6 +143,12 @@ final class Badges
         return $this->db->one('SELECT * FROM badges WHERE id = :id', [':id' => $id]);
     }
 
+    /** Le badge d une page : il n y en a qu un, l index unique badges_page_unique le garantit. */
+    public function badgeByPage(int $pageId): ?array
+    {
+        return $this->db->one('SELECT * FROM badges WHERE page_id = :page_id', [':page_id' => $pageId]);
+    }
+
     /** Le texte encode dans le QR. */
     public function qrText(array $page): string
     {
@@ -144,9 +156,10 @@ final class Badges
     }
 
     /**
-     * Creations du jour. On compte les evenements de creation (audit_log), pas les lignes
-     * qui restent : sinon supprimer un badge rembourserait le quota, et on pourrait creer,
-     * supprimer, creer sans limite.
+     * Evenements du jour. On compte les evenements (audit_log), pas les lignes qui restent :
+     * sinon supprimer un badge rembourserait le quota, et on pourrait creer, supprimer, creer
+     * sans limite. Une page portant un seul badge, enregistrer le design d une page deja badgee
+     * est un evenement comme la premiere creation : le quota porte sur les evenements.
      */
     public function usedToday(int $userId): int
     {
@@ -162,12 +175,15 @@ final class Badges
     }
 
     /**
-     * Creation d'un badge (quota applique).
+     * Enregistrement du design d une page, quota applique. Une page porte un seul badge : on ne
+     * cree pas une deuxieme ligne pour la meme page, on enregistre celle qui existe. Sans cette
+     * regle, dix enregistrements feraient dix badges portant le meme QR, et le quota ne dirait
+     * plus quoi que ce soit.
      *
      * @param array<string, mixed> $input
      * @return array<string, mixed>
      */
-    public function createBadge(int $userId, int $pageId, array $input): array
+    public function saveBadge(int $userId, int $pageId, array $input): array
     {
         if ($this->remaining($userId) <= 0) {
             throw new \RuntimeException('Quota atteint : ' . $this->dailyLimit . ' creations par jour.');
@@ -180,23 +196,43 @@ final class Badges
         }
 
         $design = Design::fromArray($input);
+        $badge = $this->badgeByPage($pageId);
+        $created = $badge === null;
 
-        $this->db->exec(
-            'INSERT INTO badges (page_id, user_id, style, bicolor, design, created_at)
-             VALUES (:page_id, :user_id, :style, :bicolor, :design, :created_at)',
-            [
-                ':page_id' => $pageId,
-                ':user_id' => $userId,
-                ':style' => $design->style,
-                ':bicolor' => $design->bicolor ? 1 : 0,
-                ':design' => json_encode($design->toArray(), JSON_UNESCAPED_SLASHES),
-                ':created_at' => now(),
-            ]
+        if ($created) {
+            $this->db->exec(
+                'INSERT INTO badges (page_id, user_id, style, bicolor, design, created_at)
+                 VALUES (:page_id, :user_id, :style, :bicolor, :design, :created_at)',
+                [
+                    ':page_id' => $pageId,
+                    ':user_id' => $userId,
+                    ':style' => $design->style,
+                    ':bicolor' => $design->bicolor ? 1 : 0,
+                    ':design' => json_encode($design->toArray(), JSON_UNESCAPED_SLASHES),
+                    ':created_at' => now(),
+                ]
+            );
+
+            $badge = $this->badgeById((int) $this->db->pdo()->lastInsertId());
+        } else {
+            $this->db->exec(
+                'UPDATE badges SET style = :style, bicolor = :bicolor, design = :design WHERE id = :id',
+                [
+                    ':id' => (int) $badge['id'],
+                    ':style' => $design->style,
+                    ':bicolor' => $design->bicolor ? 1 : 0,
+                    ':design' => json_encode($design->toArray(), JSON_UNESCAPED_SLASHES),
+                ]
+            );
+
+            $badge = $this->badgeById((int) $badge['id']);
+        }
+
+        $this->audit(
+            $userId,
+            'badge',
+            'badge ' . $badge['id'] . ' page ' . $page['slug'] . ' ' . ($created ? 'cree' : 'enregistre')
         );
-
-        $badge = $this->badgeById((int) $this->db->pdo()->lastInsertId());
-
-        $this->audit($userId, 'badge', 'badge ' . $badge['id'] . ' page ' . $page['slug']);
 
         return $badge;
     }
@@ -302,18 +338,32 @@ final class Badges
         return $fields;
     }
 
-    private function uniqueSlug(string $wanted): string
+    /**
+     * Le slug est l identite de la page : c est ce que le QR encode et ce qu un badge porte.
+     * Un slug demande et deja pris n est pas remplace par un autre : sinon la meme page existe
+     * sous deux adresses, et on ne sait plus laquelle le QR imprime designe. Un slug laisse vide
+     * est genere, parce qu il n y a rien a refuser.
+     */
+    private function newSlug(string $wanted): string
     {
         $wanted = substr(preg_replace('/[^a-z0-9]+/', '', strtolower($wanted)) ?: '', 0, self::MAX_SLUG_LENGTH);
 
-        for ($attempt = 0; $attempt < 12; $attempt++) {
-            $slug = $wanted !== '' && $attempt === 0 ? $wanted : substr(bin2hex(random_bytes(4)), 0, 6);
+        if ($wanted === '') {
+            for ($attempt = 0; $attempt < 12; $attempt++) {
+                $slug = substr(bin2hex(random_bytes(4)), 0, 6);
 
-            if ($this->db->one('SELECT id FROM pages WHERE slug = :slug', [':slug' => $slug]) === null) {
-                return $slug;
+                if ($this->db->one('SELECT id FROM pages WHERE slug = :slug', [':slug' => $slug]) === null) {
+                    return $slug;
+                }
             }
+
+            throw new \RuntimeException('Impossible de generer un identifiant unique.');
         }
 
-        throw new \RuntimeException('Impossible de generer un identifiant unique.');
+        if ($this->db->one('SELECT id FROM pages WHERE slug = :slug', [':slug' => $wanted]) !== null) {
+            throw new \RuntimeException('Cette page existe deja.');
+        }
+
+        return $wanted;
     }
 }

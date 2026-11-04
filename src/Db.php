@@ -81,6 +81,8 @@ final class Db
             $this->pdo->exec($sql);
         }
 
+        $this->oneBadgePerPage();
+
         // Colonnes ajoutees apres la premiere version du schema : une base existante
         // n'est jamais reconstruite, seulement completee. La politique par credential, la
         // trace de la premiere verification utilisateur et le format d'attestation sont lus
@@ -112,6 +114,61 @@ final class Db
     private function columns(string $table): array
     {
         return array_column($this->all('PRAGMA table_info(' . $table . ')'), 'name');
+    }
+
+    /**
+     * Une page porte un seul badge. Le QR encode le slug de la page, donc deux badges sur la
+     * meme page sont le meme QR montre deux fois : l onglet du tableau de bord est la page.
+     *
+     * Une base creee avant cette regle peut avoir plusieurs badges pour une page. On garde le
+     * plus recent (le plus grand id, l ordre d insertion), celui dont l onglet montre le design,
+     * et on retire les autres. C est une suppression definitive, donc la trace est ecrite : le
+     * nom de l action est distinct pour ne pas compter ces lignes dans le quota de creations, et
+     * le detail dit que la ligne vient de la migration et non d une route. L index unique ne peut
+     * etre pose qu apres ce tri.
+     */
+    private function oneBadgePerPage(): void
+    {
+        $duplicates = $this->all(
+            'SELECT b.id, b.user_id, p.slug FROM badges b JOIN pages p ON p.id = b.page_id
+             WHERE b.id NOT IN (SELECT MAX(id) FROM badges GROUP BY page_id)
+             ORDER BY b.id',
+            []
+        );
+
+        if ($duplicates === []) {
+            $this->pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS badges_page_unique ON badges(page_id)');
+
+            return;
+        }
+
+        $this->pdo->beginTransaction();
+
+        try {
+            foreach ($duplicates as $row) {
+                $this->exec('DELETE FROM badges WHERE id = :id', [':id' => (int) $row['id']]);
+
+                $this->exec(
+                    'INSERT INTO audit_log (user_id, action, detail, created_at)
+                     VALUES (:user_id, :action, :detail, :created_at)',
+                    [
+                        ':user_id' => (int) $row['user_id'],
+                        ':action' => 'badge_doublon_supprime',
+                        ':detail' => 'badge ' . (int) $row['id'] . ' page ' . $row['slug']
+                            . ' (migration une page = un badge)',
+                        ':created_at' => \now(),
+                    ]
+                );
+            }
+
+            $this->pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS badges_page_unique ON badges(page_id)');
+
+            $this->pdo->commit();
+        } catch (\Throwable $error) {
+            $this->pdo->rollBack();
+
+            throw $error;
+        }
     }
 
     /** @return list<string> */
