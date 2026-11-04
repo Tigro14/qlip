@@ -125,8 +125,11 @@ nav {
     margin-left: auto;
 }
 
-nav a,
-nav button {
+/* La regle porte seulement sur les liens, pas sur les boutons : un bouton recoit son fond en
+   var(--ink) par la regle sur button, donc lui donner la couleur du texte du nav (var(--ink))
+   ferait du texte de la meme couleur que son fond, c est a dire rien. Le bouton du nav garde donc
+   son texte en var(--bg) sur fond var(--ink) ; le lien reste en var(--ink) sur le fond de la page. */
+nav a {
     color: var(--ink);
     text-decoration: none;
 }

@@ -206,7 +206,11 @@ Quand le compte a une credential, le mot de passe ne suffit plus :
    donne aucun acces.
 2. `POST /login/2fa` : la ceremony. La credential doit appartenir au compte en attente, et le
    verrou est le meme que celui du mot de passe (8 tentatives par session, puis 300 s) : sinon
-   une ceremony refusee servirait a tester les credentials sans limite.
+   une ceremony refusee servirait a tester les credentials sans limite. La page rend le bouton et
+   le message du script, rien d autre : l identifiant de credential, sa politique et son compteur
+   restent cote serveur, les afficher dresserait la liste des clees du compte. La page de connexion
+   ne propose pas de lien vers une ceremony : le second facteur vient apres le mot de passe, et une
+   ceremonie ne peut rien faire sans session deja confirmee.
 3. L'assertion acceptee confirme la session (`webauthn_at`) et la marque `login_2fa` dans
    `audit_log` ; l'evenement du mot de passe est `login_pending`, donc le journal distingue les
    deux etapes par compte. La session garde la credential qui a fait la confirmation, donc
@@ -534,10 +538,11 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
 9. `tests/http_test.py` : front controller relance sur un serveur PHP integre, y compris
    le PNG decode par zxing, la ceremony WebAuthn par HTTP, la reinitialisation de mot de
    passe (reponse identique pour une adresse sans compte, lien usage unique, verou), les
-   suppressions (jeton, confirmation, compte, GET refuse en 405), et les onglets du tableau
-   de bord verifiees comme repli : un panneau par page, chaque onglet pointe sur son panneau,
-   aucun panneau masque dans le rendu, les roles ajoutes par le script et non par le template,
-   la page sans badge annoncee comme telle ;
+   suppressions (jeton, confirmation, compte, GET refuse en 405), la feuille relue (regle qui
+   masque le panneau, et aucune regle donnant au texte la couleur de son fond), et les onglets
+   du tableau de bord verifiees comme repli : un panneau par page, chaque onglet pointe sur son
+   panneau, aucun panneau masque dans le rendu, les roles ajoutes par le script et non par le
+   template, la page sans badge annoncee comme telle ;
 10. `tests/live_test.py` (lance par `tests/live.sh`) : protocole sur l instance deployee,
    voir la section suivante.
 

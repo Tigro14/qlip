@@ -261,6 +261,10 @@ utilise le MTA local.
   onglet a son panneau quand le nombre est variable. Le template rend la liste complete des
   panneaux, `tabs.js` ajoute les roles et masque ceux qui ne sont pas choisis. Les roles ne sont
   pas dans le template parce qu ils ne sont vrais que quand un seul panneau est montre.
+- Une regle de couleur ne peut pas donner au texte la couleur de son fond : `button` porte son fond
+  en `var(--ink)` et son texte en `var(--bg)`, donc une regle de nav qui etend la couleur du lien
+  (`var(--ink)`) aux boutons rend le texte invisible. La regle du nav porte seulement sur les liens,
+  et `tests/http_test.py` relit la feuille pour ce que le rendu ne peut pas montrer.
 - `session_status()` peut mentir avec un binaire PHP statique : la logique s'appuie sur
   `session_id() !== ''`, et les constantes `PHP_SESSION_*` y ont des valeurs differentes.
 - `FILTER_VALIDATE_EMAIL` refuse `admin@test` : les tests utilisent `admin@qlip.test` et

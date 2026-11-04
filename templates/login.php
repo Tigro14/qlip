@@ -32,8 +32,4 @@
             <a href="<?= attr(url('register')) ?>">Inscription</a>
         <?php endif; ?>
     </p>
-
-    <p>
-        <a class="button" href="<?= attr(url('admin/yubikey')) ?>">Connexion YubiKey (administration)</a>
-    </p>
 </section>

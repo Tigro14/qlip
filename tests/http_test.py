@@ -149,6 +149,28 @@ def reset_link_of(body):
     return match.group(1).decode() if match else ""
 
 
+def css_rules(text):
+    """Regles de la feuille, relues telle quelle : (selecteur, {propriete: valeur}).
+
+    Les commentaires sont retires. La feuille n est pas rendue : une regle qui donne au texte la
+    couleur de son fond ne se voit pas a l execution, elle ne se voit que relue.
+    """
+    clean = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    rules = []
+
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", clean):
+        declarations = {}
+
+        for declaration in match.group(2).split(";"):
+            if ":" in declaration:
+                prop, value = declaration.split(":", 1)
+                declarations[prop.strip()] = value.strip()
+
+        rules.append((" ".join(match.group(1).split()), declarations))
+
+    return rules
+
+
 def b64url_decode(value):
     return base64.urlsafe_b64decode(value + "=" * ((4 - len(value) % 4) % 4))
 
@@ -550,6 +572,24 @@ def run():
         "sans la regle, un display sur le panneau rendrait tous les panneaux visibles",
     )
 
+    # Une regle qui donne au texte la couleur de son fond ne rend rien. La feuille n est pas
+    # rendue par la suite, donc cette erreur ne se voit que relue : le bouton porte son texte en
+    # var(--bg) sur fond var(--ink), et le nav donne la couleur du lien, var(--ink). Les deux
+    # variables doivent rester distinctes, et la regle du nav ne doit pas s etendre aux boutons.
+    rules = css_rules(sheet)
+    invisible = [sel for sel, decls in rules if decls.get("color") and decls.get("color") == decls.get("background")]
+
+    check(
+        "feuille : aucune regle ne donne au texte la couleur de son fond",
+        invisible == [],
+        ", ".join(invisible) or "%d regles relues" % len(rules),
+    )
+    check(
+        "feuille : la couleur du nav ne s applique pas aux boutons",
+        all("button" not in sel for sel, _ in rules if "nav" in sel),
+        "le bouton du nav doit garder un texte distinct de son fond : sinon il est invisible",
+    )
+
     csrf = csrf_of(body)
 
     status, headers, _ = get("/admin")
@@ -725,10 +765,29 @@ def run():
     # La session en attente ne donne aucun acces : le mot de passe seul ne confirme pas la session.
     check("aucun acces avant la ceremonie", status == 302 and "/login" in headers.get("location", ""), headers.get("location", ""))
 
+    # La page de connexion ne propose pas la ceremonie : le second facteur vient apres le mot de
+    # passe, sur /login/2fa. Le lien d administration ne pouvait rien faire sans session confirmee
+    # par une assertion, et il dressait la page d administration sur la page de connexion.
+    check(
+        "page de connexion : pas de lien vers une ceremonie",
+        b"yubikey" not in get("/login", two)[2],
+        "le second facteur vient apres le mot de passe, la ceremonie est fermee sans session confirmee",
+    )
+
     status, _, body = get("/login/2fa", two)
 
     check("page du second facteur", status == 200 and b'data-action="assert"' in body)
     check("la page pose sa cible d assertion", b'data-assert="http://127.0.0.1:%d/login/2fa"' % PORT in body)
+
+    # Ce que le serveur sait n est pas ce que la page doit montrer : l identifiant de credential,
+    # sa politique et son compteur sont des mesures internes, ils ne servent a rien pour presenter
+    # la cle, et les afficher dresse la liste des clees du compte. La page rend le bouton et le
+    # message du script, rien d autre.
+    check(
+        "page du second facteur : aucune mesure interne affichee",
+        b"<code>" not in body and b"politique" not in body and b"compteur" not in body,
+        "credential_id, policy et sign_count restent cote serveur",
+    )
 
     two_csrf = csrf_of(body)
     status, ceremony = get_json("/webauthn/challenge", two)

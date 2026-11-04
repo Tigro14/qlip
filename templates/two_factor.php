@@ -24,14 +24,6 @@
              data-assert="<?= attr(url('login/2fa')) ?>">
             <button type="button" data-action="assert">Presente la cle</button>
 
-            <ul class="note">
-                <?php foreach ($credentials as $credential): ?>
-                    <li><code><?= e($credential['credential_id']) ?></code> &mdash;
-                        politique <?= e($credential['policy'] ?? '') ?> &mdash;
-                        compteur <?= (int) $credential['sign_count'] ?></li>
-                <?php endforeach; ?>
-            </ul>
-
             <p class="result"></p>
         </div>
 
