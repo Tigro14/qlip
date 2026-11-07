@@ -8,6 +8,14 @@ Pour chaque scenario :
     meme sens sont signalees comme contacts (faces confondes de deux volumes).
   - 3MF : zip valide, namespaces corrects, couleurs, unite mm, nombre de
     triangles identique au STL.
+  - Gravure du dos, mesuree seulement sur les facettes du STL (sans regarder
+    le code qui l'a produite) : le dos est au plan z = 0 ; les fonds d'alveole
+    forme un seul plan horizontal entre 0 et le dessus, oriente vers le bas ;
+    chaque arete d'un fond est portee par une paroi verticale qui descend
+    jusqu'au dos (l'alveole est ouverte, pas une bulle enfermee dans la
+    matiere) ; la gravure a la meme hauteur sur tous les solides grave ; et le
+    volume retire entre "sans_texte" et "engrave_mono" est exactement la surface
+    des fonds fois la hauteur mesuree (c'est ce qui prouve que c'est un creux).
 
 Usage : python3 tests/stl_check.py
 """
@@ -131,6 +139,125 @@ def check_solid(solid):
     return problems, contacts, signed_volume(solid["facets"])
 
 
+def facet_plane_z(facet):
+    """z du plan horizontal qui porte les trois sommets, ou None si la facet est inclinee."""
+    z = facet["points"][0][2]
+
+    if all(abs(point[2] - z) <= 1e-7 for point in facet["points"]):
+        return z
+
+    return None
+
+
+def check_engraving(solid):
+    """Mesure la gravure du dos seulement sur les facettes du STL.
+
+    Retourne (problemes, mesure) ; mesure est None quand le solid n'a pas de gravure.
+    """
+    problems = []
+    facets = [
+        facet
+        for facet in solid["facets"]
+        if len(facet["points"]) == 3 and triangle_area(facet["points"]) > EPS
+    ]
+
+    if not facets:
+        return problems, None
+
+    z_min = min(point[2] for facet in facets for point in facet["points"])
+    z_max = max(point[2] for facet in facets for point in facet["points"])
+
+    if z_min < -1e-6:
+        return ["le solide descend sous le dos : z mini %.6f" % z_min], None
+
+    if z_min > 1e-6:
+        # Un volume pose sur la plaque (l'encre bicolor) n'a pas de dos grave : rien a mesurer.
+        return problems, None
+
+    # Facettes horizontales orientees vers le bas : le dos (z = 0) et les fonds d alveole.
+    down = {}
+
+    for facet in facets:
+        nx, ny, nz = facet["normal"]
+
+        if abs(nx) > 1e-6 or abs(ny) > 1e-6 or nz > -0.5:
+            continue
+
+        z = facet_plane_z(facet)
+
+        if z is not None:
+            down.setdefault(round(z, 6), []).append(facet)
+
+    if 0.0 not in down:
+        problems.append("aucune face orientee vers le bas au plan du dos")
+
+    floors = {z: items for z, items in down.items() if z > 1e-6 and z < z_max - 1e-6}
+
+    if len(floors) > 1:
+        return [
+            "fonds d alveole a plusieurs hauteurs : %s" % sorted(floors)
+        ], None
+
+    if not floors:
+        return problems, None
+
+    depth = next(iter(floors))
+    floor_facets = floors[depth]
+    area = sum(triangle_area(facet["points"]) for facet in floor_facets)
+
+    # Chaque arete d un fond doit etre portee soit par un autre fond, soit par une
+    # paroi verticale qui descend jusqu au dos : une alveole est ouverte, pas une
+    # bulle enfermee dans la matiere.
+    owners = {}
+
+    for index, facet in enumerate(facets):
+        points = facet["points"]
+
+        for i in range(3):
+            owners.setdefault((key(points[i]), key(points[(i + 1) % 3])), []).append(index)
+
+    floor_ids = set(id(facet) for facet in floor_facets)
+    walls = 0
+
+    for facet in floor_facets:
+        points = facet["points"]
+
+        for i in range(3):
+            a, b = key(points[i]), key(points[(i + 1) % 3])
+            neighbours = owners.get((b, a), [])
+            shared = [j for j in neighbours if id(facets[j]) in floor_ids]
+            others = [j for j in neighbours if id(facets[j]) not in floor_ids]
+
+            if shared:
+                continue  # arete commune a deux alveoles voisines
+
+            if len(others) != 1:
+                problems.append(
+                    "arete de fond %s|%s portee par %d autres facettes" % (a, b, len(others))
+                )
+                continue
+
+            wall = facets[others[0]]
+            heights = sorted(point[2] for point in wall["points"])
+            nx, ny, nz = wall["normal"]
+
+            if abs(nz) > 1e-6 or heights[0] > 1e-6 or abs(heights[1] - depth) > 1e-6 or abs(heights[2] - depth) > 1e-6:
+                problems.append(
+                    "paroi du fond qui ne descend pas jusqu au dos : %s" % (wall["points"],)
+                )
+            else:
+                walls += 1
+
+    measure = {
+        "depth": depth,
+        "area": area,
+        "floors": len(floor_facets),
+        "walls": walls,
+    }
+
+    return problems, measure
+
+
 def check_3mf(path, expected_volumes):
     problems = []
 
@@ -195,6 +322,8 @@ def check_3mf(path, expected_volumes):
 
 def main():
     failures = 0
+    measures = {}
+    volumes = {}
 
     for name in sorted(os.listdir(OUT)):
         if not name.endswith(".stl"):
@@ -232,6 +361,20 @@ def main():
             if contacts:
                 print("   contacts : %d" % len(contacts))
 
+            engraving_problems, measure = check_engraving(solid)
+
+            for problem in engraving_problems[:5]:
+                print("   %s" % problem)
+                failures += 1
+
+            if measure is not None:
+                measures[(scenario, solid["name"])] = measure
+                print("   gravure mesuree : hauteur %.3f mm, %d facettes de fond, surface %.3f mm2, %d parois jusqu au dos" % (
+                    measure["depth"], measure["floors"], measure["area"], measure["walls"]
+                ))
+
+            volumes[(scenario, solid["name"])] = volume
+
         mf_path = os.path.join(OUT, scenario + ".3mf")
 
         if os.path.exists(mf_path):
@@ -241,6 +384,32 @@ def main():
             for problem in problems[:5]:
                 print("   %s" % problem)
                 failures += 1
+
+    # La gravure est a la meme hauteur partout ou elle existe.
+    depths = sorted({measure["depth"] for measure in measures.values()})
+
+    if len(depths) > 1:
+        print("gravure : hauteurs differentes selon les solides : %s" % depths)
+        failures += 1
+
+    # Ce que la gravure enleve, mesure seulement sur les STL : la surface des fonds
+    # fois la hauteur mesuree. sans_texte et engrave_mono different par la seule gravure.
+    key_plain = ("sans_texte", "badge")
+    key_engraved = ("engrave_mono", "badge")
+
+    if key_plain in volumes and key_engraved in volumes and key_engraved in measures:
+        measure = measures[key_engraved]
+        expected = measure["area"] * measure["depth"]
+        removed = volumes[key_plain] - volumes[key_engraved]
+        tolerance = 1e-6 * max(expected, 1.0)
+
+        if removed <= 0.0 or abs(removed - expected) > tolerance:
+            print("gravure : %.6f mm3 retires, %.6f attendus (surface des fonds x hauteur)" % (
+                removed, expected
+            ))
+            failures += 1
+        else:
+            print("gravure : %.3f mm3 retires = surface des fonds x hauteur mesuree" % removed)
 
     print("----")
     print("problemes : %d" % failures)

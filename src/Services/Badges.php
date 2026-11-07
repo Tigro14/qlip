@@ -275,9 +275,11 @@ final class Badges
     {
         $design = Design::fromArray(json_decode((string) $badge['design'], true) ?: []);
         $page = $this->pageById((int) $badge['page_id']);
-        $qr = QrCode::encode($this->qrText($page ?? ['slug' => '']), 'M');
+        $url = $this->qrText($page ?? ['slug' => '']);
+        $qr = QrCode::encode($url, 'M');
 
-        return Badge::build($qr, $design);
+        // Le texte grave au dos est la meme adresse que celle du QR, en clair.
+        return Badge::build($qr, $design, $url);
     }
 
     /** @return array{stl: string, threeMf: string, volumes: list<array<string, mixed>>} */

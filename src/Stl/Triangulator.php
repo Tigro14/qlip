@@ -195,7 +195,7 @@ final class Triangulator
             && $point[1] <= max($p[1], $q[1]) + 1e-9;
     }
 
-    private static function pointInPolygon(array $polygon, array $point): bool
+    public static function pointInPolygon(array $polygon, array $point): bool
     {
         $inside = false;
         $n = count($polygon);

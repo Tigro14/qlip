@@ -752,6 +752,17 @@ check('margin borne', $design->margin <= 10.0, (string) $design->margin);
 check('couleur invalide rejetee', $design->colorBase === '1A1A1A', $design->colorBase);
 check('couleur valide acceptee', $design->colorInk === '00FF00', $design->colorInk);
 
+// Texte grave au dos : angle et profondeur bornes, et une alveole du QR ne perce jamais
+// la plaque jusqu'aux alveoles gravees au dos.
+$engrave = Design::fromArray(['textAngle' => 200, 'textDepth' => 3.0, 'thickness' => 1.5, 'depth' => 2.0]);
+
+check('textAngle borne', $engrave->textAngle >= -90.0 && $engrave->textAngle <= 90.0, (string) $engrave->textAngle);
+check('profondeur de gravure bornee', $engrave->textDepth >= 0.1 && $engrave->textDepth <= $engrave->thickness / 4.0, (string) $engrave->textDepth);
+check('alveole QR sans percee du dos', $engrave->depth + $engrave->textDepth + 0.2 <= $engrave->thickness, sprintf('QR %.2f + gravure %.2f <= %.2f', $engrave->depth, $engrave->textDepth, $engrave->thickness));
+check('gravure activee par defaut', $engrave->engraveUrl);
+check('gravure desactivee acceptee', Design::fromArray(['engraveUrl' => false])->engraveUrl === false);
+check('champs graves persistes dans le design', isset($engrave->toArray()['engraveUrl'], $engrave->toArray()['textDepth'], $engrave->toArray()['textAngle']));
+
 // Nom de volume : un jeton dans un STL ASCII, un retour a la ligne casserait le fichier.
 $stl = StlWriter::write([['name' => "base\nnom casse", 'mesh' => $export['volumes'][0]['mesh']]]);
 

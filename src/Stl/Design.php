@@ -27,6 +27,11 @@ final class Design
     public string $colorBase = '1A1A1A';
     public string $colorInk = 'FFFFFF';
 
+    // Texte grave au dos : l URL de la page, en clair, en diagonale.
+    public bool $engraveUrl = true;
+    public float $textDepth = 0.2;   // profondeur de gravure, en millimetres
+    public float $textAngle = 45.0;  // angle de la ligne de texte, en degres
+
     public static function fromArray(array $values): self
     {
         $design = new self();
@@ -42,6 +47,15 @@ final class Design
         }
 
         $design->bicolor = (bool) ($values['bicolor'] ?? false);
+        $design->engraveUrl = (bool) ($values['engraveUrl'] ?? true);
+
+        if (isset($values['textAngle'])) {
+            $design->textAngle = max(-90.0, min(90.0, (float) $values['textAngle']));
+        }
+
+        if (isset($values['textDepth'])) {
+            $design->textDepth = (float) $values['textDepth'];
+        }
 
         foreach (['colorBase', 'colorInk'] as $key) {
             if (isset($values[$key])) {
@@ -55,7 +69,6 @@ final class Design
             }
         }
 
-        $design->depth = max(0.4, min(2.0, $design->depth));
         $design->thickness = max(1.0, min(6.0, $design->thickness));
         $design->holeRadius = max(1.0, min(5.0, $design->holeRadius));
         $design->width = max(20.0, min(60.0, $design->width));
@@ -66,6 +79,15 @@ final class Design
         // Le trou doit rester dans la plaque : la bande se mesure depuis le bord haut,
         // et un bandeau trop court ferait deborder le cercle du trou.
         $design->band = max($design->holeRadius + 1.0, min(15.0, $design->band));
+
+        // La gravure du dos ne prend pas plus d un quart de la plaque : il doit rester de
+        // la matiere sous une alveole.
+        $design->textDepth = max(0.1, min(0.6, $design->textDepth, $design->thickness / 4.0));
+
+        // Une alveole QR ne doit pas traverser la plaque : sans matiere entre son fond et le
+        // fond des alveoles gravees au dos, les deux se rejoignent et le solide ne se referme
+        // plus. La place garde 0,2 mm, le minimum qui reste visible a l impression.
+        $design->depth = max(0.4, min(2.0, $design->depth, $design->thickness - $design->textDepth - 0.2));
 
         return $design;
     }
@@ -96,6 +118,9 @@ final class Design
             'bicolor' => $this->bicolor,
             'colorBase' => $this->colorBase,
             'colorInk' => $this->colorInk,
+            'engraveUrl' => $this->engraveUrl,
+            'textDepth' => $this->textDepth,
+            'textAngle' => $this->textAngle,
         ];
     }
 }

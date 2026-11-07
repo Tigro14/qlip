@@ -358,11 +358,23 @@ Un badge est une plaque arrondie avec un trou, et le QR code en relief ou grave.
 - Monochrome : un seul solide, `engraved` (grave) ou `raised` (relief).
 - Bicolore : deux volumes (base + encre), chacun etanche, ecrits dans un .3MF avec les
   groupes de couleurs pour les slicers multicolores.
+- L URL de la page est gravee en clair au dos, en creux de `textDepth` (0,2 mm par defaut),
+  en diagonale : c est une grille de pixels comme le QR, tournee de `textAngle` (45 degres),
+  dont la taille est la plus grande qui tienne dans la plaque, loin du trou. Une adresse trop
+  longue passe sur deux lignes, puis est tronquee ; le tilde final dit qu il manque des
+  caracteres. `engraveUrl: false` supprime la gravure. Une alveole du QR ne peut pas percer la
+  plaque jusqu aux alveoles du dos : `Design` borne `depth` en consequence.
 - Sorties : STL ASCII (`/badges/{id}/stl`) et .3MF (`/badges/{id}/3mf`).
 
 Les maillages sont verifies : chaque arete doit apparaitre dans les deux sens. Les aretes
 utilisees deux fois dans le meme sens sont des contacts (faces confondues des volumes
 bicolores), signalees mais pas considerees comme des erreurs.
+
+La gravure du dos est verifiee par mesure sur les STL eux-memes, sans regarder le code qui
+les a produits : les fonds d alveole forment un seul plan a la profondeur demandee, chaque
+arete de fond est portee par une paroi qui descend jusqu au dos (une alveole est ouverte,
+pas une bulle enfermee), et le volume retire entre un badge grave et le meme sans gravure
+est exactement la surface des fonds fois la hauteur mesuree.
 
 ## Suppressions
 
@@ -505,7 +517,7 @@ La suite lance, dans le conteneur `localhost/qlip-test` :
 2. `tests/qr_compare.py` : contre-verification de l'encodeur QR avec la reference Python
    `qrcode` + decodage `zxing-cpp` (36 cas structures) ;
 3. `tests/qr_fuzz.py` : 220 textes aleatoires, memes matrices et memes decodages ;
-4. `tests/stl_dump.php` + `tests/stl_check.py` : cinq scenarios de badge, validation
+4. `tests/stl_dump.php` + `tests/stl_check.py` : huit scenarios de badge, validation
    independante des solides et des .3MF ;
 5. `tests/webauthn_fixture.py` + `tests/webauthn_check.php` : faux authenticateur
    (EC2/P-256 et RSA), rejoue, mauvaise origine, mauvaise signature, challenge different ;
