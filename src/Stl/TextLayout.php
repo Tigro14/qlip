@@ -19,6 +19,12 @@ namespace Qlip\Stl;
  * tient meme pas sur deux lignes est tronque, et le tilde final dit qu il manque des
  * caracteres : le texte grave ne doit pas promettre une adresse complete quand il ne
  * l imprime pas.
+ *
+ * Le texte est grave miroir dans les coordonnees de la plaque : le dos se regarde a
+ * l envers (x inverse, y conserve), donc les signes et le haut des glyphes sont comptes
+ * du cote des coordonnees elevees. Vu depuis le dos, les deux inversions s annulent et
+ * le texte se lit a l endroit. Grave a l endroit dans les coordonnees de la plaque, il
+ * se lirait a l envers depuis le dos, ce qui est meconnaissable alveole par alveole.
  */
 final class TextLayout
 {
@@ -207,6 +213,11 @@ final class TextLayout
         }
 
         $cells = [];
+        $longest = 0;
+
+        foreach ($rows as $row) {
+            $longest = max($longest, strlen($row));
+        }
 
         for ($v = 0; $v < $gridRows; $v++) {
             for ($u = 0; $u < $cols; $u++) {
@@ -218,7 +229,7 @@ final class TextLayout
                 ];
 
                 $cells[$u . ',' . $v] = [
-                    'engraved' => self::pixelIsInk($rows, $u, $v),
+                    'engraved' => self::pixelIsInk($rows, $u, $v, $longest),
                     'corners' => $corners,
                     // Un carre convexe se coupe selon sa diagonale : les deux triangles
                     // gardent le sens trigonometrique du carre.
@@ -240,24 +251,41 @@ final class TextLayout
         return ['pixel' => $pixel, 'rows' => $rows, 'boundary' => $boundary, 'cells' => $cells];
     }
 
-    /** Le pixel (u, v) de la grille fait-il partie d un glyphe ? */
-    private static function pixelIsInk(array $rows, int $u, int $v): bool
+    /**
+     * Le pixel (u, v) de la grille fait-il partie d un glyphe ?
+     *
+     * La grille est gravee miroir : le signe 0 est pose du cote des u eleves, comme la
+     * colonne 0 du glyphe, et la rangee 0 du glyphe comme la premiere ligne du texte du
+     * cote des v eleves. Le miroir porte sur le bloc entier, a partir de la ligne la plus
+     * longue : les deux lignes d un texte commenceent du meme cote, donc le bloc se lit
+     * aligne a gauche depuis le dos. Le dos se regardant a l envers de la plaque, ces
+     * comptes a rebours rendent le texte lisible depuis le dos.
+     */
+    private static function pixelIsInk(array $rows, int $u, int $v, int $longest): bool
     {
-        $line = intdiv($v, PixelFont::HEIGHT + self::LINE_GAP);
-        $row = $v - $line * (PixelFont::HEIGHT + self::LINE_GAP);
+        $block = intdiv($v, PixelFont::HEIGHT + self::LINE_GAP);
+        $row = $v - $block * (PixelFont::HEIGHT + self::LINE_GAP);
 
-        if ($row >= PixelFont::HEIGHT || !isset($rows[$line])) {
+        if ($row >= PixelFont::HEIGHT) {
             return false; // rangee de separation entre deux lignes
         }
 
-        $index = intdiv($u, PixelFont::WIDTH + self::GAP);
-        $col = $u - $index * (PixelFont::WIDTH + self::GAP);
+        $line = count($rows) - 1 - $block;
 
-        if ($col >= PixelFont::WIDTH || $index >= strlen($rows[$line])) {
-            return false; // colonne de separation, ou ligne plus courte que la plus longue
+        if (!isset($rows[$line])) {
+            return false;
         }
 
-        return PixelFont::glyph($rows[$line][$index])[$row][$col] === '#';
+        $advance = PixelFont::WIDTH + self::GAP;
+        $index = $longest - 1 - intdiv($u, $advance);
+        $col = $u - intdiv($u, $advance) * $advance;
+
+        if ($col >= PixelFont::WIDTH || $index >= strlen($rows[$line])) {
+            return false; // colonne de separation, ou rang de grille hors du texte
+        }
+
+        return PixelFont::glyph($rows[$line][$index])
+            [PixelFont::HEIGHT - 1 - $row][PixelFont::WIDTH - 1 - $col] === '#';
     }
 
     private static function cellKey(int $u, int $v, int $cols, int $gridRows): ?string

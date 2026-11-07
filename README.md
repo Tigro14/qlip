@@ -362,8 +362,10 @@ Un badge est une plaque arrondie avec un trou, et le QR code en relief ou grave.
   en diagonale : c est une grille de pixels comme le QR, tournee de `textAngle` (45 degres),
   dont la taille est la plus grande qui tienne dans la plaque, loin du trou. Une adresse trop
   longue passe sur deux lignes, puis est tronquee ; le tilde final dit qu il manque des
-  caracteres. `engraveUrl: false` supprime la gravure. Une alveole du QR ne peut pas percer la
-  plaque jusqu aux alveoles du dos : `Design` borne `depth` en consequence.
+  caracteres. Le texte est grave miroir dans les coordonnees de la plaque : le dos se regarde
+  a l envers, donc grave a l endroit il s y lirait a l envers ; vu depuis le dos il se lit a
+  l endroit, aligne a gauche. `engraveUrl: false` supprime la gravure. Une alveole du QR ne
+  peut pas percer la plaque jusqu aux alveoles du dos : `Design` borne `depth` en consequence.
 - Sorties : STL ASCII (`/badges/{id}/stl`) et .3MF (`/badges/{id}/3mf`).
 
 Les maillages sont verifies : chaque arete doit apparaitre dans les deux sens. Les aretes
@@ -374,7 +376,10 @@ La gravure du dos est verifiee par mesure sur les STL eux-memes, sans regarder l
 les a produits : les fonds d alveole forment un seul plan a la profondeur demandee, chaque
 arete de fond est portee par une paroi qui descend jusqu au dos (une alveole est ouverte,
 pas une bulle enfermee), et le volume retire entre un badge grave et le meme sans gravure
-est exactement la surface des fonds fois la hauteur mesuree.
+est exactement la surface des fonds fois la hauteur mesuree. La lisibilite est verifiee separement :
+`tests/stl_dump.php` reconstruit la carte gravee signe par signe a partir de la police, a la
+place ou un lecteur place derriere le badge la verrait, et la compare aux cellules gravees,
+sans passer par `TextLayout`.
 
 ## Suppressions
 

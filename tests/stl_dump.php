@@ -8,6 +8,7 @@ use Qlip\Qr\QrCode;
 use Qlip\Stl\Badge;
 use Qlip\Stl\Design;
 use Qlip\Stl\Mesh;
+use Qlip\Stl\PixelFont;
 use Qlip\Stl\StlWriter;
 use Qlip\Stl\TextLayout;
 use Qlip\Stl\ThreeMfWriter;
@@ -51,6 +52,51 @@ function levels(Mesh $mesh): array
     ksort($levels);
 
     return $levels;
+}
+
+/**
+ * Carte attendue des pixels graves, mesuree sur le texte lu depuis le dos : le dos se
+ * regarde a l envers de la plaque (x inverse, y conserve), donc le signe i tombe sur la
+ * cellule miroir de la grille, a partir de la ligne la plus longue, et le haut du glyphe
+ * comme la premiere ligne du texte du cote des v eleves. Reconstruite a partir de la
+ * police, sans TextLayout.
+ *
+ * @param array{rows: list<string>, cells: array<string, array<string, mixed>>} $layout
+ * @return array<string, bool>
+ */
+function expectedInk(array $layout): array
+{
+    $advance = PixelFont::WIDTH + TextLayout::GAP;
+    $lineGap = PixelFont::HEIGHT + TextLayout::LINE_GAP;
+    $lines = count($layout['rows']);
+    $longest = 0;
+
+    foreach ($layout['rows'] as $row) {
+        $longest = max($longest, strlen($row));
+    }
+
+    $want = [];
+
+    foreach ($layout['rows'] as $line => $text) {
+        for ($i = 0; $i < strlen($text); $i++) {
+            $glyph = PixelFont::glyph($text[$i]);
+
+            for ($r = 0; $r < PixelFont::HEIGHT; $r++) {
+                for ($c = 0; $c < PixelFont::WIDTH; $c++) {
+                    if ($glyph[$r][$c] !== '#') {
+                        continue;
+                    }
+
+                    $u = $advance * ($longest - 1 - $i) + (PixelFont::WIDTH - 1 - $c);
+                    $v = ($lines - 1 - $line) * $lineGap + (PixelFont::HEIGHT - 1 - $r);
+
+                    $want[$u . ',' . $v] = true;
+                }
+            }
+        }
+    }
+
+    return $want;
 }
 
 $short = 'https://qlip.test/p/ab12cd';
@@ -176,6 +222,34 @@ check(
     $narrow !== null && $narrow['truncated'] && str_ends_with($narrow['text'], '~'),
     $narrow === null ? 'aucune mise en page' : $narrow['text']
 );
+
+// Chaque pixel grave tombe sur la cellule miroir de la grille : le texte grave se lit a
+// l endroit depuis le dos, glyphe par glyphe. Mesure une ligne, deux lignes, et une
+// troncature.
+$readable = [
+    'gravure lisible depuis le dos' => TextLayout::build($short, Design::fromArray($scenarios['engrave_mono'])),
+    'gravure lisible depuis le dos (tronquee)' => TextLayout::build($long, Design::fromArray($scenarios['long'])),
+    'gravure lisible depuis le dos (etroite)' => $narrow,
+];
+
+foreach ($readable as $label => $map) {
+    if ($map === null) {
+        check($label, false, 'aucune mise en page');
+        continue;
+    }
+
+    $want = expectedInk($map);
+    $ok = $want !== [];
+
+    foreach ($map['cells'] as $key => $cell) {
+        if ($cell['engraved'] !== isset($want[$key])) {
+            $ok = false;
+            break;
+        }
+    }
+
+    check($label, $ok, sprintf('%d pixels graves', count($want)));
+}
 
 echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), PHP_EOL;
 

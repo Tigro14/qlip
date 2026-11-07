@@ -139,6 +139,9 @@ final class Badge
      * donc la normale du fond pointe vers le bas, et chaque paroi est parcourue a rebours
      * du contour du pixel (la matiere reste a gauche).
      *
+     * La grille vient de TextLayout deja gravee miroir dans les coordonnees de la plaque :
+     * le dos se regarde a l envers, donc un texte grave a l endroit s y lirait a l envers.
+     *
      * @param array{boundary: list<array{float, float}>, cells: array<string, array{engraved: bool, corners: list<array{float, float}>, triangles: list<array<array{float, float}, array{float, float}, array{float, float}}>, neighbours: list<string|null>>} $layout
      */
     private static function engraveBack(Mesh $mesh, array $layout, Design $design, float $bottom): void
