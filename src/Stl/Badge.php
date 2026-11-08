@@ -150,7 +150,7 @@ final class Badge
 
         foreach ($layout['cells'] as $cell) {
             if (!$cell['engraved']) {
-                // Pixel clair : il referme le trou de l empreinte, au niveau du dos.
+                // Cellule claire : elle referme le trou de l empreinte, au niveau du dos.
                 $mesh->addFace($cell['triangles'], $bottom, false);
 
                 continue;

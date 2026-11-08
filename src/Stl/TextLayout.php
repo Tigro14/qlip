@@ -7,34 +7,38 @@ namespace Qlip\Stl;
 /**
  * Mise en page du texte grave au dos du porte-cles.
  *
- * Le texte est une grille de pixels, comme les modules du QR : chaque pixel grave est une
- * alveole, et l empreinte de la grille est un trou de la face du dos, referme par les
- * pixels clairs (le meme procede que l empreinte du QR sur la face haute). Une grille
- * tournee reste une grille : les aretes des pixels sont exactement les segments du contour
- * de l empreinte, subdivies a chaque pixel, donc le solide reste manifold.
+ * Le texte est grave en sillons continus (StrokeFont) sur une grille fine : chaque
+ * cellule gravee est une alveole, et l empreinte de la grille est un trou de la face
+ * du dos, referme par les cellules claires (le meme procede que l empreinte du QR sur
+ * la face haute). Une grille tournee reste une grille : les aretes des cellules sont
+ * exactement les segments du contour de l empreinte, subdivies a chaque cellule, donc
+ * le solide reste manifold.
  *
- * La grille est tournee (45 degres par defaut) : le texte court en diagonale, d un bord a
- * l autre de la plaque. Sa taille est la plus grande qui tienne dans la plaque, loin du
- * trou ; quand une seule ligne ne tient pas, le texte passe sur deux lignes. Ce qui ne
- * tient meme pas sur deux lignes est tronque, et le tilde final dit qu il manque des
- * caracteres : le texte grave ne doit pas promettre une adresse complete quand il ne
- * l imprime pas.
+ * La grille est tournee (45 degres par defaut) : le texte court en diagonale, d un
+ * bord a l autre de la plaque. Sa taille est la plus grande qui tienne dans la plaque,
+ * loin du trou ; quand une seule ligne ne tient pas, le texte passe sur deux lignes.
+ * Ce qui ne tient meme pas sur deux lignes est tronque, et le tilde final dit qu il
+ * manque des caracteres : le texte grave ne doit pas promettre une adresse complete
+ * quand il ne l imprime pas.
  *
  * Le texte est grave miroir dans les coordonnees de la plaque : le dos se regarde a
- * l envers (x inverse, y conserve), donc les signes et le haut des glyphes sont comptes
- * du cote des coordonnees elevees. Vu depuis le dos, les deux inversions s annulent et
- * le texte se lit a l endroit. Grave a l endroit dans les coordonnees de la plaque, il
- * se lirait a l envers depuis le dos, ce qui est meconnaissable alveole par alveole.
+ * l envers (x inverse, y conserve), donc les positions de lecture sont comptees du
+ * cote des coordonnees elevees, et le bas des glyphes comme la premiere ligne du
+ * texte du cote des v eleves. Le miroir porte sur le bloc entier, a partir de la ligne
+ * la plus longue : les deux lignes d un texte commencent du meme cote, donc le bloc
+ * se lit aligne a gauche depuis le dos. Vu depuis le dos, les deux inversions
+ * s annulent et le texte se lit a l endroit ; grave a l endroit dans les coordonnees
+ * de la plaque, il se lirait a l envers, ce qui est meconnaissable alveole par alveole.
  */
 final class TextLayout
 {
-    public const GAP = 1;         // colonne libre entre deux glyphes
-    public const LINE_GAP = 2;    // rangee libre entre deux lignes
-    public const MAX_PIXEL = 1.0; // cote d un pixel grave, en millimetres
-    public const MIN_PIXEL = 0.35;
+    public const GAP = 2;         // cellules fines libres entre deux glyphes
+    public const LINE_GAP = 5;    // rangees libres entre deux lignes de texte
+    public const MAX_PIXEL = 0.40; // cote d une cellule gravee, en millimetres
+    public const MIN_PIXEL = 0.18; // en dessous, le sillon devient plus fin que la buse
     public const EDGE_MARGIN = 1.2;  // distance entre l empreinte et le bord de la plaque
     public const HOLE_MARGIN = 0.8;  // distance entre l empreinte et le trou
-    public const PIXEL_STEP = 0.02;
+    public const PIXEL_STEP = 0.01;
 
     private const BREAKS = '/-._~';
 
@@ -54,7 +58,7 @@ final class TextLayout
     }
 
     /**
-     * Empreinte gravee au dos : contour de la grille et pixels, avec leur orientation.
+     * Empreinte gravee au dos : contour de la grille et cellules, avec leur orientation.
      *
      * @return array{
      *     text: string,
@@ -134,6 +138,47 @@ final class TextLayout
     }
 
     /**
+     * Positions de lecture des glyphes et taille de la grille, calculees une fois
+     * pour ces lignes : avec des avances variables, la largeur d une ligne ne se
+     * devine pas au nombre de caracteres.
+     *
+     * @param list<string> $rows
+     * @return array{
+     *     cols: int,
+     *     gridRows: int,
+     *     charAt: list<array<int, array{string, int}>>
+     * }
+     */
+    private static function plan(array $rows): array
+    {
+        $cols = 0;
+        $charAt = [];
+
+        foreach ($rows as $row) {
+            $x = 0;
+            $map = [];
+
+            for ($i = 0; $i < strlen($row); $i++) {
+                $advance = StrokeFont::advance($row[$i]);
+
+                for ($c = 0; $c < $advance; $c++) {
+                    $map[$x + $c] = [$row[$i], $c];
+                }
+
+                $x += $advance + ($i + 1 < strlen($row) ? self::GAP : 0);
+            }
+
+            $charAt[] = $map;
+            $cols = max($cols, $x);
+        }
+
+        $lines = count($rows);
+        $gridRows = StrokeFont::LINE_ROWS * $lines + self::LINE_GAP * ($lines - 1);
+
+        return ['cols' => $cols, 'gridRows' => $gridRows, 'charAt' => $charAt];
+    }
+
+    /**
      * Plus grande taille de pixel qui tient pour ces lignes, ou null si aucune ne tient.
      *
      * Les centres tries du haut vers le bas : un centre plus bas eloigne le texte du trou
@@ -144,28 +189,26 @@ final class TextLayout
      */
     private static function fit(array $rows, Design $design): ?array
     {
-        $longest = 0;
-
-        foreach ($rows as $row) {
-            $longest = max($longest, strlen($row));
-        }
-
-        $cols = PixelFont::WIDTH * $longest + self::GAP * max(0, $longest - 1);
-        $lines = count($rows);
-        $gridRows = PixelFont::HEIGHT * $lines + self::LINE_GAP * ($lines - 1);
+        $plan = self::plan($rows);
 
         $centers = [
             [$design->width / 2.0, $design->height / 2.0],
             [$design->width / 2.0, ($design->height - $design->band - $design->holeRadius) / 2.0],
         ];
 
-        for ($pixel = self::MAX_PIXEL; $pixel >= self::MIN_PIXEL; $pixel -= self::PIXEL_STEP) {
-            foreach ($centers as [$cx, $cy]) {
-                $layout = self::geometry($rows, $pixel, $cx, $cy, $cols, $gridRows, $design);
+        $steps = (int) round((self::MAX_PIXEL - self::MIN_PIXEL) / self::PIXEL_STEP);
 
-                if (self::fits($layout['boundary'], $design)) {
-                    return $layout;
+        for ($i = 0; $i <= $steps; $i++) {
+            $pixel = self::MAX_PIXEL - $i * self::PIXEL_STEP;
+
+            foreach ($centers as [$cx, $cy]) {
+                // L empreinte est un rectangle tourne : deux solides convexes, il
+                // suffit de tester les quatre coins avant de batir les cellules.
+                if (!self::fits(self::rectPoints($plan, $pixel, $cx, $cy, $design), $design)) {
+                    continue;
                 }
+
+                return self::geometry($rows, $plan, $pixel, $cx, $cy, $design);
             }
         }
 
@@ -173,27 +216,61 @@ final class TextLayout
     }
 
     /**
-     * Grille tournee : les points sont calcules depuis les coordonnees entieres de la
-     * grille, donc un coin partage par deux pixels est ecrit avec les memes chiffres.
+     * Les quatre coins du rectangle tourne de l empreinte.
      *
-     * @param list<string> $rows
-     * @return array{pixel: float, rows: list<string>, boundary: list<array{float, float}>, cells: array<string, array<string, mixed>>}
+     * @return list<array{float, float}>
      */
-    private static function geometry(array $rows, float $pixel, float $cx, float $cy, int $cols, int $gridRows, Design $design): array
+    private static function rectPoints(array $plan, float $pixel, float $cx, float $cy, Design $design): array
+    {
+        $point = self::pointAt($plan, $pixel, $cx, $cy, $design);
+
+        return [
+            $point(0, 0),
+            $point($plan['cols'], 0),
+            $point($plan['cols'], $plan['gridRows']),
+            $point(0, $plan['gridRows']),
+        ];
+    }
+
+    /**
+     * Le point (u, v) de la grille, dans les coordonnees de la plaque.
+     *
+     * Les points sont calcules depuis les coordonnees entieres de la grille, donc un
+     * coin partage par deux cellules est ecrit avec les memes chiffres.
+     *
+     * @return callable(int, int): array{float, float}
+     */
+    private static function pointAt(array $plan, float $pixel, float $cx, float $cy, Design $design): callable
     {
         $angle = $design->textAngle * M_PI / 180.0;
         $cos = cos($angle);
         $sin = sin($angle);
-        $spanX = $cols * $pixel;
-        $spanY = $gridRows * $pixel;
+        $spanX = $plan['cols'] * $pixel;
+        $spanY = $plan['gridRows'] * $pixel;
 
-        $point = static function (int $u, int $v) use ($cx, $cy, $pixel, $cos, $sin, $spanX, $spanY): array {
+        return static function (int $u, int $v) use ($cx, $cy, $pixel, $cos, $sin, $spanX, $spanY): array {
             $dx = $u * $pixel - $spanX / 2.0;
             $dy = $v * $pixel - $spanY / 2.0;
 
             return [$cx + $dx * $cos - $dy * $sin, $cy + $dx * $sin + $dy * $cos];
         };
+    }
 
+    /**
+     * Grille tournee et ses cellules.
+     *
+     * @param list<string> $rows
+     * @return array{pixel: float, rows: list<string>, boundary: list<array{float, float}>, cells: array<string, array<string, mixed>>}
+     */
+    private static function geometry(array $rows, array $plan, float $pixel, float $cx, float $cy, Design $design): array
+    {
+        $cols = $plan['cols'];
+        $gridRows = $plan['gridRows'];
+        $point = self::pointAt($plan, $pixel, $cx, $cy, $design);
+
+        // Le contour est subdivie au coin de chaque cellule : ses segments sont exactement
+        // les aretes des cellules de bord, comme l empreinte du QR sur la face haute. Un
+        // contour a quatre coins laisserait des aretes non partagees sur la face du dos.
         $boundary = [];
 
         for ($u = 0; $u < $cols; $u++) {
@@ -213,11 +290,6 @@ final class TextLayout
         }
 
         $cells = [];
-        $longest = 0;
-
-        foreach ($rows as $row) {
-            $longest = max($longest, strlen($row));
-        }
 
         for ($v = 0; $v < $gridRows; $v++) {
             for ($u = 0; $u < $cols; $u++) {
@@ -229,7 +301,7 @@ final class TextLayout
                 ];
 
                 $cells[$u . ',' . $v] = [
-                    'engraved' => self::pixelIsInk($rows, $u, $v, $longest),
+                    'engraved' => self::cellIsInk($rows, $plan, $u, $v),
                     'corners' => $corners,
                     // Un carre convexe se coupe selon sa diagonale : les deux triangles
                     // gardent le sens trigonometrique du carre.
@@ -252,22 +324,23 @@ final class TextLayout
     }
 
     /**
-     * Le pixel (u, v) de la grille fait-il partie d un glyphe ?
+     * La cellule (u, v) de la grille fine fait-elle partie d un trait grave ?
      *
-     * La grille est gravee miroir : le signe 0 est pose du cote des u eleves, comme la
-     * colonne 0 du glyphe, et la rangee 0 du glyphe comme la premiere ligne du texte du
-     * cote des v eleves. Le miroir porte sur le bloc entier, a partir de la ligne la plus
-     * longue : les deux lignes d un texte commenceent du meme cote, donc le bloc se lit
-     * aligne a gauche depuis le dos. Le dos se regardant a l envers de la plaque, ces
-     * comptes a rebours rendent le texte lisible depuis le dos.
+     * La grille est gravee miroir : la position de lecture 0 est posee du cote des u
+     * eleves, et le bas des glyphes comme la premiere ligne du texte du cote des v
+     * eleves. Le bloc entier se miroir a partir de la ligne la plus longue : les lignes
+     * plus courtes laissent le bout des u libre, et se lisent alignees a gauche depuis
+     * le dos. Le dos se regardant a l envers de la plaque, ces comptes a rebours rendent
+     * le texte lisible depuis le dos, glyphe par glyphe.
      */
-    private static function pixelIsInk(array $rows, int $u, int $v, int $longest): bool
+    private static function cellIsInk(array $rows, array $plan, int $u, int $v): bool
     {
-        $block = intdiv($v, PixelFont::HEIGHT + self::LINE_GAP);
-        $row = $v - $block * (PixelFont::HEIGHT + self::LINE_GAP);
+        $blockStep = StrokeFont::LINE_ROWS + self::LINE_GAP;
+        $block = intdiv($v, $blockStep);
+        $rank = $v - $block * $blockStep;
 
-        if ($row >= PixelFont::HEIGHT) {
-            return false; // rangee de separation entre deux lignes
+        if ($rank >= StrokeFont::LINE_ROWS) {
+            return false; // rangee de separation entre deux lignes de texte
         }
 
         $line = count($rows) - 1 - $block;
@@ -276,16 +349,15 @@ final class TextLayout
             return false;
         }
 
-        $advance = PixelFont::WIDTH + self::GAP;
-        $index = $longest - 1 - intdiv($u, $advance);
-        $col = $u - intdiv($u, $advance) * $advance;
+        $x = $plan['cols'] - 1 - $u;
 
-        if ($col >= PixelFont::WIDTH || $index >= strlen($rows[$line])) {
+        if (!isset($plan['charAt'][$line][$x])) {
             return false; // colonne de separation, ou rang de grille hors du texte
         }
 
-        return PixelFont::glyph($rows[$line][$index])
-            [PixelFont::HEIGHT - 1 - $row][PixelFont::WIDTH - 1 - $col] === '#';
+        [$char, $column] = $plan['charAt'][$line][$x];
+
+        return StrokeFont::inkMap($char)[$rank][$column];
     }
 
     private static function cellKey(int $u, int $v, int $cols, int $gridRows): ?string

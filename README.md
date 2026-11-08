@@ -359,8 +359,11 @@ Un badge est une plaque arrondie avec un trou, et le QR code en relief ou grave.
 - Bicolore : deux volumes (base + encre), chacun etanche, ecrits dans un .3MF avec les
   groupes de couleurs pour les slicers multicolores.
 - L URL de la page est gravee en clair au dos, en creux de `textDepth` (0,2 mm par defaut),
-  en diagonale : c est une grille de pixels comme le QR, tournee de `textAngle` (45 degres),
-  dont la taille est la plus grande qui tienne dans la plaque, loin du trou. Une adresse trop
+  en diagonale : les lettres sont dessinees a la main en traits continus
+  (`src/Stl/StrokeFont.php`, avance variable par glyphe), gravees en sillons d environ
+  0,7 mm sur une grille fine tournee de `textAngle` (45 degres) ; comme pour le QR,
+  l empreinte de la grille est un trou du dos referme par les cellules claires. La taille
+  de la grille est la plus grande qui tienne dans la plaque, loin du trou. Une adresse trop
   longue passe sur deux lignes, puis est tronquee ; le tilde final dit qu il manque des
   caracteres. Le texte est grave miroir dans les coordonnees de la plaque : le dos se regarde
   a l envers, donc grave a l endroit il s y lirait a l envers ; vu depuis le dos il se lit a
@@ -372,14 +375,23 @@ Les maillages sont verifies : chaque arete doit apparaitre dans les deux sens. L
 utilisees deux fois dans le meme sens sont des contacts (faces confondues des volumes
 bicolores), signalees mais pas considerees comme des erreurs.
 
+Mesure du trancheur (Bambu Studio, sur un badge grave) : les contacts en coin des alveoles
+gravees et des modules QR diagonaux sont comptes comme aretes non-manifold, et le meme
+message signale des facettes inversees. Le volume est ferme et son orientation est coherente
+partout ou elle est mesurable : chaque arete simple est appariee en sens opposes, chaque
+arete de contact est portee deux fois dans chaque sens. Ces avertissements ne sont pas des
+defauts du modele, le tranchage est correct : il n y a rien a reparer avec un outil tiers.
+
 La gravure du dos est verifiee par mesure sur les STL eux-memes, sans regarder le code qui
 les a produits : les fonds d alveole forment un seul plan a la profondeur demandee, chaque
 arete de fond est portee par une paroi qui descend jusqu au dos (une alveole est ouverte,
 pas une bulle enfermee), et le volume retire entre un badge grave et le meme sans gravure
 est exactement la surface des fonds fois la hauteur mesuree. La lisibilite est verifiee separement :
-`tests/stl_dump.php` reconstruit la carte gravee signe par signe a partir de la police, a la
-place ou un lecteur place derriere le badge la verrait, et la compare aux cellules gravees,
-sans passer par `TextLayout`.
+`tests/stl_dump.php` reconstruit la carte gravee signe par signe a partir des traits de la
+police, a la place ou un lecteur place derriere le badge la verrait, et la compare aux cellules
+gravees, sans passer par `TextLayout` ; la largeur du sillon grave est mesuree entre 0,4 et
+1,0 mm, parce qu un sillon plus fin que la buse ne sort pas et un sillon trop large bouche
+les lettres.
 
 ## Suppressions
 

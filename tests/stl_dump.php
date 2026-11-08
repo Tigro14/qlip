@@ -8,7 +8,7 @@ use Qlip\Qr\QrCode;
 use Qlip\Stl\Badge;
 use Qlip\Stl\Design;
 use Qlip\Stl\Mesh;
-use Qlip\Stl\PixelFont;
+use Qlip\Stl\StrokeFont;
 use Qlip\Stl\StlWriter;
 use Qlip\Stl\TextLayout;
 use Qlip\Stl\ThreeMfWriter;
@@ -55,44 +55,93 @@ function levels(Mesh $mesh): array
 }
 
 /**
- * Carte attendue des pixels graves, mesuree sur le texte lu depuis le dos : le dos se
- * regarde a l envers de la plaque (x inverse, y conserve), donc le signe i tombe sur la
- * cellule miroir de la grille, a partir de la ligne la plus longue, et le haut du glyphe
- * comme la premiere ligne du texte du cote des v eleves. Reconstruite a partir de la
- * police, sans TextLayout.
+ * Un point tombe-t-il dans un trait grave ? Reecrit ici, dans le test : la carte
+ * attendue ne doit pas se reposer sur la rasterisation de StrokeFont.
+ *
+ * @param list<list<array{float, float}>> $strokes
+ */
+function inkAt(array $strokes, float $x, float $y, float $radius): bool
+{
+    $limit = $radius * $radius;
+
+    foreach ($strokes as $stroke) {
+        $n = count($stroke);
+
+        for ($k = 0; $k + 1 < $n; $k++) {
+            [$ax, $ay] = $stroke[$k];
+            [$bx, $by] = $stroke[$k + 1];
+            $ux = $bx - $ax;
+            $uy = $by - $ay;
+            $length = $ux * $ux + $uy * $uy;
+
+            if ($length <= 0.0) {
+                $dx = $x - $ax;
+                $dy = $y - $ay;
+            } else {
+                $t = max(0.0, min(1.0, (($x - $ax) * $ux + ($y - $ay) * $uy) / $length));
+                $dx = $x - ($ax + $t * $ux);
+                $dy = $y - ($ay + $t * $uy);
+            }
+
+            if ($dx * $dx + $dy * $dy <= $limit) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Carte attendue des cellules gravees, mesuree sur le texte lu depuis le dos : le dos se
+ * regarde a l envers de la plaque (x inverse, y conserve), donc la position de lecture 0
+ * tombe sur la cellule miroir de la grille, a partir de la ligne la plus longue, et le bas
+ * des glyphes comme la premiere ligne du texte du cote des v eleves. Reconstruite a partir
+ * des traits de la police, sans TextLayout ni StrokeFont::inkMap.
  *
  * @param array{rows: list<string>, cells: array<string, array<string, mixed>>} $layout
  * @return array<string, bool>
  */
 function expectedInk(array $layout): array
 {
-    $advance = PixelFont::WIDTH + TextLayout::GAP;
-    $lineGap = PixelFont::HEIGHT + TextLayout::LINE_GAP;
+    $blockStep = StrokeFont::LINE_ROWS + TextLayout::LINE_GAP;
     $lines = count($layout['rows']);
-    $longest = 0;
+
+    // Les avances varient : la largeur de chaque ligne se mesure glyphe par glyphe.
+    $cols = 0;
 
     foreach ($layout['rows'] as $row) {
-        $longest = max($longest, strlen($row));
+        $width = 0;
+
+        for ($i = 0; $i < strlen($row); $i++) {
+            $width += StrokeFont::advance($row[$i]) + ($i > 0 ? TextLayout::GAP : 0);
+        }
+
+        $cols = max($cols, $width);
     }
 
     $want = [];
 
     foreach ($layout['rows'] as $line => $text) {
-        for ($i = 0; $i < strlen($text); $i++) {
-            $glyph = PixelFont::glyph($text[$i]);
+        $x = 0;
 
-            for ($r = 0; $r < PixelFont::HEIGHT; $r++) {
-                for ($c = 0; $c < PixelFont::WIDTH; $c++) {
-                    if ($glyph[$r][$c] !== '#') {
+        for ($i = 0; $i < strlen($text); $i++) {
+            [$advance, $strokes] = StrokeFont::glyph($text[$i]);
+
+            for ($r = 0; $r < StrokeFont::LINE_ROWS; $r++) {
+                for ($c = 0; $c < $advance; $c++) {
+                    if (!inkAt($strokes, $c + 0.5, StrokeFont::DESCENT + $r + 0.5, StrokeFont::STROKE)) {
                         continue;
                     }
 
-                    $u = $advance * ($longest - 1 - $i) + (PixelFont::WIDTH - 1 - $c);
-                    $v = ($lines - 1 - $line) * $lineGap + (PixelFont::HEIGHT - 1 - $r);
+                    $u = $cols - 1 - ($x + $c);
+                    $v = ($lines - 1 - $line) * $blockStep + $r;
 
                     $want[$u . ',' . $v] = true;
                 }
             }
+
+            $x += $advance + TextLayout::GAP;
         }
     }
 
@@ -153,6 +202,16 @@ foreach ($scenarios as $name => $values) {
                 "{$name} : le texte grave ne promet pas un protocole",
                 !str_contains($layout['text'], '://') && $layout['text'] !== '',
                 $layout['text']
+            );
+
+            // Le sillon grave a la largeur du trait : plus fin que la buse il ne sort
+            // pas, trop large les lettres se bouchent.
+            $groove = 2 * StrokeFont::STROKE * $layout['pixel'];
+
+            check(
+                "{$name} : sillon grave entre 0,4 et 1,0 mm",
+                $groove >= 0.4 && $groove <= 1.0 + 1e-9,
+                sprintf('%.2f mm (pixel %.2f)', $groove, $layout['pixel'])
             );
         }
     }
